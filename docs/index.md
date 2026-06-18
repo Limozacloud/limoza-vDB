@@ -25,6 +25,7 @@ GraphQL API.
 - **[LVE schema](ingest/schema.md)** — the unified record every source maps onto.
 - **[Data sources](datasources/index.md)** — per-source feeds, field mappings, and schema coverage.
 - **[GraphQL examples](graphql-example-queries.md)** — ready-to-run queries.
+- **[MCP server](running/mcp.md)** — optional Model Context Protocol server for LLM clients.
 - **[Documentation conventions](datasource_blueprint.md)** — how to document a new source.
 
 For installation and the full CLI reference, see [Running limoza-vDB](running/docker.md).

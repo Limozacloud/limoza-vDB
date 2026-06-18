@@ -87,6 +87,23 @@ services:
       - postgres
     restart: unless-stopped
 
+  # ── MCP server (optional) ────────────────────────────────────────────────────
+  # A real MCP server exposing the vDB as MCP tools (e.g. get_cve_detail), reachable
+  # by any MCP-capable client — the Claude chat window, Claude Code, or an agent
+  # driving Gemini / Vertex AI / OpenAI. Fully decoupled (see ./mcp-server). Disabled
+  # by default; uncomment this block + set MCP_AUTH_TOKEN in .env to enable.
+  # mcp:
+  #   image: ghcr.io/limozacloud/limoza-vdb-mcp:latest
+  #   # All config lives in .env (see .env.template): MCP_AUTH_TOKEN, and either
+  #   # GRAPHQL_TOKEN or the shared HASURA_JWT_SECRET for read-only Hasura access.
+  #   # GRAPHQL_URL defaults to http://hasura:8080/v1/graphql — override in .env if needed.
+  #   env_file: .env
+  #   ports:
+  #     - "8765:8765"
+  #   depends_on:
+  #     - hasura
+  #   restart: unless-stopped
+
 volumes:
   postgres_data:
   nvd:

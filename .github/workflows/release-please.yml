@@ -74,3 +74,20 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Docker metadata (mcp)
+        id: meta_mcp
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/limozacloud/limoza-vdb-mcp
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build and push (mcp)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./mcp-server
+          push: true
+          tags: ${{ steps.meta_mcp.outputs.tags }}
+          labels: ${{ steps.meta_mcp.outputs.labels }}

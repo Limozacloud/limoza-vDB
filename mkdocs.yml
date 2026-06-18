@@ -7,12 +7,16 @@ repo_name: Limozacloud/limoza-vDB
 theme:
   name: readthedocs
 
+extra_css:
+  - css/extra.css
+
 nav:
   - Home: index.md
   - Running limoza-vDB:
     - Docker stack: running/docker.md
     - Ingest CLI: running/cli.md
     - GraphQL & Hasura: running/graphql.md
+    - MCP server: running/mcp.md
   - Pipeline:
     - Overview: ingest/index.md
     - LVE Schema: ingest/schema.md
