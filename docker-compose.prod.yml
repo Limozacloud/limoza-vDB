@@ -17,6 +17,7 @@ services:
       PYTHONUNBUFFERED:        "1"
       POSTGRES_DSN:            postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       NVD_DIR:                 /data/nvd
+      NVD_GITHUB_DIR:          /data/nvd-github
       REDHAT_DIR:              /data/redhat
       SUSE_VEX_DIR:            /data/suse-vex
       EPSS_DIR:                /data/epss
@@ -45,6 +46,7 @@ services:
       NO_PROXY:                ${NO_PROXY:-localhost,127.0.0.1,postgres}
     volumes:
       - nvd:/data/nvd
+      - nvd_github:/data/nvd-github
       - redhat:/data/redhat
       - suse_vex:/data/suse-vex
       - epss:/data/epss
@@ -107,6 +109,7 @@ services:
 volumes:
   postgres_data:
   nvd:
+  nvd_github:
   redhat:
   suse_vex:
   epss:
