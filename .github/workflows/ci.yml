@@ -1,7 +1,9 @@
 name: CI
 
-# Runs on pull requests only — intentionally not on push, so each change is
-# checked exactly once (no duplicate runs for branch push + PR).
+# Pull-request only — each change is checked exactly once (no duplicate push+PR runs).
+# Jobs are gated by which paths changed, so unrelated jobs don't run. The single
+# required status check is `ci-ok`, which aggregates the gated jobs (treating skipped
+# jobs as OK) — this avoids the "skipped required check blocks merge" deadlock.
 on:
   pull_request:
     branches:
@@ -11,36 +13,91 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      docs: ${{ steps.filter.outputs.docs }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - 'ruff.toml'
+            docs:
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - 'requirements-docs.txt'
+              - 'limoza_schema.json'
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'requirements.txt'
+              - 'entrypoint.sh'
+
   lint:
     name: Lint (ruff)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install ruff
         run: pip install ruff==0.15.17
-
       - name: Ruff check
         run: ruff check .
 
   docs:
     name: Docs build (strict)
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install MkDocs dependencies
         run: pip install -r requirements-docs.txt
-
       - name: Build docs
         run: mkdocs build --strict
+
+  docker:
+    name: Docker build
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+  ci-ok:
+    name: ci-ok
+    needs: [changes, lint, docs, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no required job failed
+        run: |
+          for r in "${{ needs.changes.result }}" "${{ needs.lint.result }}" "${{ needs.docs.result }}" "${{ needs.docker.result }}"; do
+            echo "result: $r"
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::A required job did not pass"
+              exit 1
+            fi
+          done
+          echo "All gated jobs passed or were skipped."

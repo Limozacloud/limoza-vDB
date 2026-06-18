@@ -8,7 +8,10 @@ services:
     restart: unless-stopped
 
   ingest:
-    build: .
+    # Uses the image published to GHCR by the release workflow. Requires a published
+    # release (the image must exist) and the GHCR package set to public — or a
+    # `docker login ghcr.io`. Pin to a version tag (e.g. :0.1.1) for reproducible deploys.
+    image: ghcr.io/limozacloud/limoza-vdb:latest
     env_file: .env
     environment:
       PYTHONUNBUFFERED:        "1"

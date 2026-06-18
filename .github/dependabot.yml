@@ -6,6 +6,9 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
     labels:
       - "dependencies"
       - "python"
@@ -15,6 +18,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    groups:
+      docker:
+        patterns: ["*"]
     labels:
       - "dependencies"
       - "docker"
@@ -23,6 +29,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
     labels:
       - "dependencies"
       - "ci"

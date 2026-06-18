@@ -1,0 +1,22 @@
+# Keep the Docker build context lean — the image only needs schema.sql, ingest/,
+# entrypoint.sh, and requirements.txt (see Dockerfile).
+.git
+.github
+.venv
+.claude
+docs
+site
+output
+tools
+scripts
+*.md
+mkdocs.yml
+limoza_schema.json
+docker-compose*.yml
+.env
+.env.*
+!.env.template
+ruff.toml
+requirements-docs.txt
+**/__pycache__
+*.pyc
