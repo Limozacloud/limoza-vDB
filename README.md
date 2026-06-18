@@ -58,10 +58,13 @@ The Docker Compose stack runs:
 
 ## Quickstart
 
-Requires Docker and Docker Compose.
+Requires Docker and Docker Compose. The repo ships `docker-compose.dev.yml` (local)
+and `docker-compose.prod.yml` (hardened); copy one to the git-ignored default name so
+you can customize it freely.
 
 ```bash
-# 1. Configure environment
+# 1. Pick a compose file + configure environment
+cp docker-compose.dev.yml docker-compose.yml   # or pass -f docker-compose.dev.yml
 cp .env.template .env
 # Edit .env: set POSTGRES_PASSWORD, HASURA_ADMIN_SECRET, and (recommended) NVD_API_KEY.
 # Generate a JWT signing key for read-only tokens:

@@ -9,7 +9,7 @@ tables and relationships.
 | GraphQL | `http://localhost:8080/v1/graphql` |
 | Console | `http://localhost:8080/console` |
 
-The Hasura service is configured in `docker-compose.yml` and reads
+The Hasura service is configured in `docker-compose.dev.yml` and reads
 `HASURA_ADMIN_SECRET` and `HASURA_JWT_SECRET` from `.env`.
 
 ## Custom Hasura build

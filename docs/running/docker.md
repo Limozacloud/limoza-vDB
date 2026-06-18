@@ -4,9 +4,22 @@ limoza-vDB ships as a Docker Compose stack. Everything — the database, the ing
 and the GraphQL API — runs in containers, so the only host requirements are **Docker**
 and **Docker Compose**.
 
+The repository ships two reference compose files: **`docker-compose.dev.yml`** (local
+development — exposed ports, pgAdmin, the ofelia scheduler) and
+**`docker-compose.prod.yml`** (hardened). The plain `docker-compose.yml` name is
+git-ignored, so you can copy a reference to it and customize freely without it being
+tracked:
+
+```bash
+cp docker-compose.dev.yml docker-compose.yml   # then `docker compose ...` just works
+```
+
+The examples below use the default file name; if you skip the copy, pass
+`-f docker-compose.dev.yml` to each command instead.
+
 ## Services
 
-`docker-compose.yml` defines five services:
+`docker-compose.dev.yml` defines five services:
 
 | Service | Image | Role | Exposed |
 |---------|-------|------|---------|
@@ -31,7 +44,10 @@ re-downloading everything. The database lives in the `postgres_data` volume.
 ## First-run setup
 
 ```bash
-# 1. Configure environment
+# 1. Pick a compose file (copy a reference to the default name, or use -f)
+cp docker-compose.dev.yml docker-compose.yml
+
+# 2. Configure environment
 cp .env.template .env
 # Edit .env and set at least:
 #   POSTGRES_PASSWORD     — database password
@@ -40,17 +56,17 @@ cp .env.template .env
 # Generate a JWT signing key for read-only API tokens:
 echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 
-# 2. Start the long-running services
+# 3. Start the long-running services
 docker compose up -d postgres hasura
 
-# 3. Apply the database schema (idempotent)
+# 4. Apply the database schema (idempotent)
 docker compose run --rm ingest schema
 
-# 4. Download and import data (start small, or use `all`)
+# 5. Download and import data (start small, or use `all`)
 docker compose run --rm ingest sync redhat
 docker compose run --rm ingest import redhat
 
-# 5. Wire up the GraphQL API (once)
+# 6. Wire up the GraphQL API (once)
 docker compose run --rm ingest hasura-init
 ```
 

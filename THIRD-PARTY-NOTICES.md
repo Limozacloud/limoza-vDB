@@ -41,7 +41,7 @@ Pulled at build or run time — not redistributed in this repository.
 | trivy-db-to | MIT | https://github.com/k1LoW/trivy-db-to |
 | pgschema | see upstream | https://github.com/pgplex/pgschema |
 
-> **Custom Hasura image:** `docker-compose.yml` uses `ghcr.io/mchill007/graphql-engine`,
+> **Custom Hasura image:** the compose files use `ghcr.io/mchill007/graphql-engine`,
 > a fork of Hasura GraphQL Engine **Community Edition** (Apache-2.0). It adds `_any` /
 > `_all` filter operators for element-level pattern matching on string-array columns
 > (e.g. `lve.aliases`), which limoza-vDB relies on. The changes are community-edition
