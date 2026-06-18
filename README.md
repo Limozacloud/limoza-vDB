@@ -149,6 +149,6 @@ Third-party software dependencies and runtime images are acknowledged in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 Ingested **data** carries its own upstream licenses — several require attribution
-(GHSA, OSV, EPSS, …) and Exploit-DB content is GPLv2. See
+(GHSA, OSV, EPSS, …). See
 [Source data licenses](docs/datasources/index.md#source-data-licenses) and review each
 source's terms before redistributing its data.

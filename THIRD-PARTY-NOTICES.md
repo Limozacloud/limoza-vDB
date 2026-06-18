@@ -57,5 +57,5 @@ Pulled at build or run time — not redistributed in this repository.
 limoza-vDB redistributes vulnerability **data** aggregated from many upstream feeds.
 Each feed carries its own license / terms of use — see
 [Data Sources → Source data licenses](docs/datasources/index.md#source-data-licenses).
-The most notable obligation: **Exploit-DB content is GPLv2**, and the ingester stores
-raw exploit script content; review that before redistributing the database.
+For exploit-intelligence sources, only links + metadata are stored — never the exploit
+or script body itself.

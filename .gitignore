@@ -7,8 +7,7 @@ __pycache__/
 *.egg-info/
 .DS_Store
 schema.sql.bak
-tools/osv_compare/*.csv
-tools/osv_compare/output/
+tools/osv_compare/
 output/
 scripts/*_packages.md
 _*.json

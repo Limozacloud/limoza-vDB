@@ -86,15 +86,11 @@ to credit them when redistributing.
 | Metasploit modules | BSD-style (Metasploit Framework license) | Individual modules may differ |
 | Nuclei templates | MIT | |
 | PoC-in-GitHub | Aggregated GitHub repo metadata | Each linked repo has its own license |
-| **Exploit-DB** | **GPL-2.0** | See caveat below |
+| Exploit-DB | Links + metadata only | Exploit bodies are not stored |
 
-!!! warning "Exploit-DB content is GPLv2"
-    The Exploit-DB ingester stores the **raw exploit script content** (up to 512 KiB per
-    entry) in `exploits[].metadata.content`, not just a reference link. Exploit-DB is
-    licensed **GPL-2.0**, so redistributing the database verbatim carries GPLv2
-    obligations for that content. If that is a problem for your use case, either exclude
-    the Exploit-DB `content` field when exporting/redistributing, or omit the Exploit-DB
-    source entirely.
+For the exploit-intelligence sources (Exploit-DB, Metasploit, Nuclei, PoC-in-GitHub),
+limoza-vDB stores only a **link** to each artifact plus factual metadata — never the
+exploit/script body itself.
 
 This project itself is licensed under
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
