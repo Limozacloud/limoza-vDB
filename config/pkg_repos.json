@@ -1,131 +1,134 @@
 {
   "alpine": {
-    "versions": ["3.18", "3.19", "3.20", "3.21", "edge"],
-    "repos": ["main", "community"],
+    "versions": [
+      "3.18",
+      "3.19",
+      "3.20",
+      "3.21",
+      "edge"
+    ],
+    "repos": [
+      "main",
+      "community"
+    ],
     "arch": "x86_64",
     "base_url": "https://dl-cdn.alpinelinux.org/alpine"
   },
   "debian": {
-    "releases": ["bookworm", "bullseye", "buster", "trixie"],
-    "components": ["main", "contrib", "non-free"],
-    "pockets": ["", "-security", "-updates"],
+    "releases": [
+      "bookworm",
+      "bullseye",
+      "buster",
+      "trixie"
+    ],
+    "components": [
+      "main",
+      "contrib",
+      "non-free"
+    ],
+    "pockets": [
+      "",
+      "-security",
+      "-updates"
+    ],
     "arch": "amd64",
     "base_url": "https://deb.debian.org/debian"
   },
   "ubuntu": {
     "releases": {
-      "noble":  "24.04",
-      "jammy":  "22.04",
-      "focal":  "20.04",
+      "noble": "24.04",
+      "jammy": "22.04",
+      "focal": "20.04",
       "bionic": "18.04"
     },
-    "components": ["main", "universe", "restricted", "multiverse"],
-    "pockets": ["", "-security", "-updates"],
+    "components": [
+      "main",
+      "universe",
+      "restricted",
+      "multiverse"
+    ],
+    "pockets": [
+      "",
+      "-security",
+      "-updates"
+    ],
     "arch": "amd64",
     "base_url": "https://archive.ubuntu.com/ubuntu"
   },
   "almalinux": {
-    "versions": ["8", "9"],
-    "repos": ["BaseOS", "AppStream", "extras"],
+    "versions": [
+      "8",
+      "9"
+    ],
+    "repos": [
+      "BaseOS",
+      "AppStream",
+      "extras"
+    ],
     "arch": "x86_64",
     "repomd_url_template": "https://repo.almalinux.org/almalinux/{version}/{repo}/{arch}/os/repodata/repomd.xml"
   },
   "rocky": {
-    "versions": ["8", "9"],
-    "repos": ["BaseOS", "AppStream", "extras"],
+    "versions": [
+      "8",
+      "9"
+    ],
+    "repos": [
+      "BaseOS",
+      "AppStream",
+      "extras"
+    ],
     "arch": "x86_64",
     "repomd_url_template": "https://dl.rockylinux.org/pub/rocky/{version}/{repo}/{arch}/os/repodata/repomd.xml"
   },
   "oracle": {
     "arch": "x86_64",
     "repomd_urls": [
-      {"version": "8", "repo": "BaseOS",    "url": "https://yum.oracle.com/repo/OracleLinux/OL8/baseos/latest/x86_64/repodata/repomd.xml"},
-      {"version": "8", "repo": "AppStream", "url": "https://yum.oracle.com/repo/OracleLinux/OL8/appstream/x86_64/repodata/repomd.xml"},
-      {"version": "9", "repo": "BaseOS",    "url": "https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml"},
-      {"version": "9", "repo": "AppStream", "url": "https://yum.oracle.com/repo/OracleLinux/OL9/appstream/x86_64/repodata/repomd.xml"}
+      {
+        "version": "8",
+        "repo": "BaseOS",
+        "url": "https://yum.oracle.com/repo/OracleLinux/OL8/baseos/latest/x86_64/repodata/repomd.xml"
+      },
+      {
+        "version": "8",
+        "repo": "AppStream",
+        "url": "https://yum.oracle.com/repo/OracleLinux/OL8/appstream/x86_64/repodata/repomd.xml"
+      },
+      {
+        "version": "9",
+        "repo": "BaseOS",
+        "url": "https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml"
+      },
+      {
+        "version": "9",
+        "repo": "AppStream",
+        "url": "https://yum.oracle.com/repo/OracleLinux/OL9/appstream/x86_64/repodata/repomd.xml"
+      }
     ]
   },
   "suse": {
     "arch": "x86_64",
     "repomd_urls": [
-      {"version": "15.5", "repo": "oss",    "url": "https://download.opensuse.org/distribution/leap/15.5/repo/oss/repodata/repomd.xml"},
-      {"version": "15.5", "repo": "update", "url": "https://download.opensuse.org/update/leap/15.5/oss/repodata/repomd.xml"},
-      {"version": "15.6", "repo": "oss",    "url": "https://download.opensuse.org/distribution/leap/15.6/repo/oss/repodata/repomd.xml"},
-      {"version": "15.6", "repo": "update", "url": "https://download.opensuse.org/update/leap/15.6/oss/repodata/repomd.xml"}
-    ]
-  },
-  "rhel": {
-    "arch": "x86_64",
-    "repomd_urls": [
-      {"version": "7", "repo": "server-rpms",          "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-7-server-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "server-extras-rpms",   "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-7-server-extras-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "server-optional-rpms", "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-7-server-optional-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "server-supplementary",  "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-7-server-supplementary-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "ha-rpms",              "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-ha-for-rhel-7-server-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "sap-rpms",             "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-sap-for-rhel-7-server-rpms/repodata/repomd.xml"},
-      {"version": "7", "repo": "sap-hana-rpms",        "url": "https://REDACTED.invalid/rhas7_x86_64/updates/rhel-sap-hana-for-rhel-7-server-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "baseos-rpms",          "url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-baseos-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "appstream-rpms",       "url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-appstream-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "codeready-builder",    "url": "https://REDACTED.invalid/rhas8_x86_64/updates/codeready-builder-for-rhel-8-x86_64-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "highavailability-rpms","url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-highavailability-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "sap-netweaver-rpms",   "url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-sap-netweaver-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "sap-solutions-rpms",   "url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-sap-solutions-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "supplementary-rpms",   "url": "https://REDACTED.invalid/rhas8_x86_64/updates/rhel-8-for-x86_64-supplementary-rpms/repodata/repomd.xml"},
-      {"version": "8", "repo": "epel",                 "url": "https://REDACTED.invalid/rhas8_x86_64/updates/epel/repodata/repomd.xml"},
-      {"version": "9", "repo": "baseos-rpms",          "url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-baseos-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "appstream-rpms",       "url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-appstream-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "codeready-builder",    "url": "https://REDACTED.invalid/rhas9_x86_64/updates/codeready-builder-for-rhel-9-x86_64-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "highavailability-rpms","url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-highavailability-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "sap-netweaver-rpms",   "url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-sap-netweaver-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "sap-solutions-rpms",   "url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-sap-solutions-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "supplementary-rpms",   "url": "https://REDACTED.invalid/rhas9_x86_64/updates/rhel-9-for-x86_64-supplementary-rpms/repodata/repomd.xml"},
-      {"version": "9", "repo": "epel",                 "url": "https://REDACTED.invalid/rhas9_x86_64/updates/epel/repodata/repomd.xml"},
-      {"version": "10", "repo": "baseos-rpms",         "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-baseos-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "appstream-rpms",      "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-appstream-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "codeready-builder",   "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/codeready-builder-for-rhel-10-x86_64-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "highavailability-rpms","url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-highavailability-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "sap-netweaver-rpms",  "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-sap-netweaver-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "sap-solutions-rpms",  "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-sap-solutions-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "supplementary-rpms",  "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/rhel-10-for-x86_64-supplementary-rpms/repodata/repomd.xml"},
-      {"version": "10", "repo": "epel",                "url": "https://REDACTED.invalid/rhas10_x86_64/updates/rhel10/epel/repodata/repomd.xml"}
-    ]
-  },
-  "sles": {
-    "arch": "x86_64",
-    "repomd_urls": [
-      {"version": "15-SP5", "repo": "SLES",            "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-SLES/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Basesystem",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Basesystem/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Server-Apps",     "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Server-Applications/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Legacy",          "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Legacy/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Desktop-Apps",    "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Desktop-Applications/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Dev-Tools",       "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Development-Tools/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Containers",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Containers/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Web-Scripting",   "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Web-Scripting/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "Python3",         "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Python3/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "HA",              "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-HA/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP5", "repo": "SAP-Business-One","url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-SAP-Business-One/15-SP5/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "SLES",            "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-SLES/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Basesystem",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Basesystem/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Server-Apps",     "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Server-Applications/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Legacy",          "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Legacy/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Desktop-Apps",    "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Desktop-Applications/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Dev-Tools",       "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Development-Tools/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Containers",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Containers/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Web-Scripting",   "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Web-Scripting/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "Python3",         "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Python3/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "HA",              "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-HA/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP6", "repo": "SAP-Business-One","url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-SAP-Business-One/15-SP6/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "SLES",            "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-SLES/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Basesystem",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Basesystem/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Server-Apps",     "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Server-Applications/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Legacy",          "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Legacy/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Desktop-Apps",    "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Desktop-Applications/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Dev-Tools",       "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Development-Tools/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Containers",      "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Containers/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Web-Scripting",   "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Web-Scripting/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "Python3",         "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-Python3/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "HA",              "url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Product-HA/15-SP7/x86_64/update/repodata/repomd.xml"},
-      {"version": "15-SP7", "repo": "SAP-Business-One","url": "https://REDACTED.invalid/sles15_x86_64/rmt/Updates/SLE-Module-SAP-Business-One/15-SP7/x86_64/update/repodata/repomd.xml"}
+      {
+        "version": "15.5",
+        "repo": "oss",
+        "url": "https://download.opensuse.org/distribution/leap/15.5/repo/oss/repodata/repomd.xml"
+      },
+      {
+        "version": "15.5",
+        "repo": "update",
+        "url": "https://download.opensuse.org/update/leap/15.5/oss/repodata/repomd.xml"
+      },
+      {
+        "version": "15.6",
+        "repo": "oss",
+        "url": "https://download.opensuse.org/distribution/leap/15.6/repo/oss/repodata/repomd.xml"
+      },
+      {
+        "version": "15.6",
+        "repo": "update",
+        "url": "https://download.opensuse.org/update/leap/15.6/oss/repodata/repomd.xml"
+      }
     ]
   }
 }
