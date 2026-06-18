@@ -8,8 +8,14 @@ from urllib.parse import urlparse
 from ingest.mapping import cvss_severity
 from ingest import cwe as _cwe
 
+def _cwe_dirs() -> dict:
+    return {"cwe_db": os.environ.get("CWE_DB_DIR", "/data/cwe-db")}
+
 def _cwe_name(cwe_id: str) -> str | None:
-    return _cwe.lookup(cwe_id, {"cwe_db": os.environ.get("CWE_DB_DIR", "/data/cwe-db")})
+    return _cwe.lookup(cwe_id, _cwe_dirs())
+
+def _cwe_detail(cwe_id: str) -> dict | None:
+    return _cwe.lookup_detail(cwe_id, _cwe_dirs())
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -207,6 +213,43 @@ def upsert_lve_record(cur, r: dict) -> None:
             ON CONFLICT (lve_id, cwe_id, source) DO UPDATE SET
                 name = EXCLUDED.name, advisory_ref = EXCLUDED.advisory_ref
         """, [(lve_id, c["id"], c.get("name") or _cwe_name(c["id"]), c["source"], _advisory_ref(c.get("advisory"))) for c in cwes])
+
+        # Enrich the shared CWE dictionary on-reference: upsert the full weakness
+        # definition for each referenced cwe_id. Deduped by cwe_id (a single LVE
+        # may cite the same CWE from several sources). Ids absent from the local
+        # json_repo/W clone yield no detail and are silently skipped.
+        cwe_details = list({
+            d["cwe_id"]: d
+            for d in (_cwe_detail(c["id"]) for c in cwes) if d
+        }.values())
+        if cwe_details:
+            execute_values(cur, """
+                INSERT INTO cwe (cwe_id, name, abstraction, description, extended_description,
+                    likelihood_of_exploit, common_consequences, potential_mitigations,
+                    modes_of_introduction, detection_methods, related_attack_patterns,
+                    related_weaknesses) VALUES %s
+                ON CONFLICT (cwe_id) DO UPDATE SET
+                    name                    = EXCLUDED.name,
+                    abstraction             = EXCLUDED.abstraction,
+                    description             = EXCLUDED.description,
+                    extended_description    = EXCLUDED.extended_description,
+                    likelihood_of_exploit   = EXCLUDED.likelihood_of_exploit,
+                    common_consequences     = EXCLUDED.common_consequences,
+                    potential_mitigations   = EXCLUDED.potential_mitigations,
+                    modes_of_introduction   = EXCLUDED.modes_of_introduction,
+                    detection_methods       = EXCLUDED.detection_methods,
+                    related_attack_patterns = EXCLUDED.related_attack_patterns,
+                    related_weaknesses      = EXCLUDED.related_weaknesses,
+                    synced_at               = now()
+            """, [(d["cwe_id"], d["name"], d["abstraction"], d["description"],
+                   d["extended_description"], d["likelihood_of_exploit"],
+                   json.dumps(d["common_consequences"])     if d["common_consequences"]     else None,
+                   json.dumps(d["potential_mitigations"])   if d["potential_mitigations"]   else None,
+                   json.dumps(d["modes_of_introduction"])   if d["modes_of_introduction"]   else None,
+                   json.dumps(d["detection_methods"])       if d["detection_methods"]       else None,
+                   json.dumps(d["related_attack_patterns"]) if d["related_attack_patterns"] else None,
+                   json.dumps(d["related_weaknesses"])      if d["related_weaknesses"]      else None)
+                  for d in cwe_details])
 
     refs = _dedup(r.get("references"), "url")
     if refs:

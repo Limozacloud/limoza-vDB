@@ -28,7 +28,21 @@ query FullCVEScan($cve_id: String!) {
       titles { value source advisory_ref }
       descriptions { value source advisory_ref }
       cvss { version score vector severity source product_id }
-      cwes { cwe_id name source }
+      cwes {
+        cwe_id name source
+        cwe {
+          abstraction
+          description
+          extended_description
+          likelihood_of_exploit
+          common_consequences
+          potential_mitigations
+          modes_of_introduction
+          detection_methods
+          related_attack_patterns
+          related_weaknesses
+        }
+      }
       references { url type source }
       advisories { advisory_id source url published updated vendor_data }
       upstream { upstream_id purl fix_version fix_commit ranges versions source }

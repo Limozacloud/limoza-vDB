@@ -123,10 +123,14 @@ Type: array  Unique by: (id, source)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | e.g. `CWE-122` |
-| `name` | string\|null | Human-readable name when provided |
+| `id` | string | e.g. `CWE-122`; joins to the `cwe` dictionary table for the full weakness definition |
+| `name` | string\|null | Human-readable name when provided; else filled from the CWE dictionary |
 | `source` | string | Who classified it |
 | `advisory` | ref\|null | Link to advisory |
+
+The shared weakness definition (mitigations, consequences, likelihood, …) is **not**
+duplicated per record — it lives once in the `cwe` dictionary table, populated on-reference
+from the [CWE source](../datasources/cwe.md) and keyed by `id`.
 
 ---
 

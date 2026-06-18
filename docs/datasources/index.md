@@ -64,7 +64,7 @@ other source follows (see the [documentation conventions](../datasource_blueprin
 | Source | Format | Role |
 |--------|--------|------|
 | [NVD CPE](cpe.md) | NVD CPE API 2.0 | CPE validation dictionary (no LVE records) |
-| [CWE](cwe.md) | CWE REST-API repo | CWE name lookup (fallback for `cwes[].name`) |
+| [CWE](cwe.md) | CWE REST-API repo | `cwe` dictionary table + name fallback for `cwes[].name` |
 
 ## Source data licenses
 

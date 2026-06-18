@@ -38,6 +38,89 @@
     "severity_enum": {
       "type": ["string", "null"],
       "enum": ["critical", "high", "medium", "low", "informational", null]
+    },
+
+    "cwe": {
+      "title": "CweDictionaryEntry",
+      "description": "Standalone CWE weakness definition — one row per weakness, shared across all LVEs. This is NOT part of a vulnerability record; it lives independently in the `cwe` dictionary table. A vulnerability record's cwes[].id joins here by cwe_id. Populated on-reference from the CWE-CAPEC json_repo/W dictionary (mitigations, consequences, likelihood, …) so consumers have full weakness context from the database alone.",
+      "type": "object",
+      "required": ["cwe_id"],
+      "additionalProperties": false,
+      "properties": {
+        "cwe_id":                { "type": "string", "pattern": "^CWE-[0-9]+$", "description": "Primary key. Matches a vulnerability record's cwes[].id.", "examples": ["CWE-79", "CWE-122"] },
+        "name":                  { "type": ["string", "null"], "description": "Weakness name.", "examples": ["Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"] },
+        "abstraction":           { "type": ["string", "null"], "description": "CWE abstraction level.", "examples": ["Pillar", "Class", "Base", "Variant"] },
+        "description":           { "type": ["string", "null"], "description": "Short weakness description." },
+        "extended_description":  { "type": ["string", "null"], "description": "Extended weakness description." },
+        "likelihood_of_exploit": { "type": ["string", "null"], "description": "MITRE likelihood-of-exploit rating.", "examples": ["High", "Medium", "Low"] },
+        "common_consequences": {
+          "type": ["array", "null"],
+          "description": "Impact of the weakness when exploited.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scope":  { "type": ["array", "null"], "items": { "type": "string" }, "examples": [["Confidentiality", "Access Control"]] },
+              "impact": { "type": ["array", "null"], "items": { "type": "string" }, "examples": [["Read Application Data", "Bypass Protection Mechanism"]] },
+              "note":   { "type": ["string", "null"] }
+            }
+          }
+        },
+        "potential_mitigations": {
+          "type": ["array", "null"],
+          "description": "Recommended mitigations, per lifecycle phase.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "phase":         { "type": ["array", "null"], "items": { "type": "string" }, "examples": [["Architecture and Design"]] },
+              "strategy":      { "type": ["string", "null"], "examples": ["Libraries or Frameworks"] },
+              "description":   { "type": ["string", "null"] },
+              "effectiveness": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "modes_of_introduction": {
+          "type": ["array", "null"],
+          "description": "Where/when the weakness is typically introduced.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "phase": { "type": ["string", "null"], "examples": ["Implementation"] },
+              "note":  { "type": ["string", "null"] }
+            }
+          }
+        },
+        "detection_methods": {
+          "type": ["array", "null"],
+          "description": "How the weakness can be detected.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "method":        { "type": ["string", "null"], "examples": ["Automated Static Analysis"] },
+              "description":   { "type": ["string", "null"] },
+              "effectiveness": { "type": ["string", "null"], "examples": ["Moderate"] }
+            }
+          }
+        },
+        "related_attack_patterns": {
+          "type": ["array", "null"],
+          "description": "Associated CAPEC attack-pattern ids.",
+          "items": { "type": "string", "pattern": "^CAPEC-[0-9]+$" },
+          "examples": [["CAPEC-63", "CAPEC-85"]]
+        },
+        "related_weaknesses": {
+          "type": ["array", "null"],
+          "description": "Parent/child relationships within the CWE tree.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "nature":  { "type": ["string", "null"], "examples": ["ChildOf", "PeerOf"] },
+              "cwe_id":  { "type": ["string", "null"], "pattern": "^CWE-[0-9]+$", "examples": ["CWE-74"] },
+              "view_id": { "type": ["string", "null"], "examples": ["1000"] }
+            }
+          }
+        },
+        "synced_at": { "type": ["string", "null"], "format": "date-time", "description": "When this dictionary entry was last refreshed." }
+      }
     }
   },
 
@@ -175,13 +258,13 @@
 
     "cwes": {
       "type": "array",
-      "description": "CWE weakness identifiers. One entry per (id, source) — sources may disagree. advisory links to the advisory that provided this classification — null for sources without a formal advisory.",
+      "description": "CWE weakness identifiers. One entry per (id, source) — sources may disagree. advisory links to the advisory that provided this classification — null for sources without a formal advisory. This is the per-record classification only; the shared weakness definition (mitigations, consequences, likelihood, …) lives once in the cwe dictionary table, keyed by id.",
       "items": {
         "type": "object",
         "required": ["id", "source"],
         "properties": {
-          "id":       { "type": "string", "examples": ["CWE-122"] },
-          "name":     { "type": ["string", "null"], "description": "Human-readable name when provided by source." },
+          "id":       { "type": "string", "description": "CWE id; joins to the cwe dictionary table for the full weakness definition.", "examples": ["CWE-122"] },
+          "name":     { "type": ["string", "null"], "description": "Human-readable name when provided by source; otherwise filled from the CWE dictionary." },
           "source":   { "type": "string", "examples": ["nvd", "microsoft", "redhat"] },
           "advisory": { "$ref": "#/$defs/advisory_ref" }
         }

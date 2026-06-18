@@ -50,6 +50,18 @@ query FullCVEScan($cve_id: String!) {
         cwe_id
         name
         source
+        cwe {
+          abstraction
+          description
+          extended_description
+          likelihood_of_exploit
+          common_consequences
+          potential_mitigations
+          modes_of_introduction
+          detection_methods
+          related_attack_patterns
+          related_weaknesses
+        }
       }
       references {
         url

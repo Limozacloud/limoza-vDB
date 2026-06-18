@@ -404,7 +404,7 @@ def main():
             "lve_mitigations", "lve_impacts",
             "lve_exploits", "lve_history",
         ]
-        ALL_TABLES = ["lve", "lve_cve", "notices"] + CHILD_TABLES
+        ALL_TABLES = ["lve", "lve_cve", "notices", "cwe"] + CHILD_TABLES
 
         print("Tracking tables...")
         for t in ALL_TABLES:
@@ -473,6 +473,21 @@ def main():
             except RuntimeError as e:
                 print(f"  ✗ {t} → lve: {e}")
 
+        print("Creating object relationship (lve_cwes → cwe dictionary)...")
+        try:
+            _hasura({"type": "pg_create_object_relationship", "args": {
+                "source": "default",
+                "table": {"schema": "public", "name": "lve_cwes"},
+                "name": "cwe",
+                "using": {"manual_configuration": {
+                    "remote_table": {"schema": "public", "name": "cwe"},
+                    "column_mapping": {"cwe_id": "cwe_id"},
+                }},
+            }})
+            print("  ✓ lve_cwes → cwe")
+        except RuntimeError as e:
+            print(f"  ✗ lve_cwes → cwe: {e}")
+
         print("Setting readonly permissions...")
         for t in ALL_TABLES:
             try:
@@ -504,6 +519,7 @@ def main():
             "lve_packages", "lve_upstream",
             "lve_advisories", "lve_references", "lve_cwes", "lve_cvss",
             "lve_descriptions", "lve_titles", "lve_cve", "notices", "lve",
+            "cwe",
         ]
         yes = "--yes" in args
         tables = [a for a in args[1:] if not a.startswith("--")]

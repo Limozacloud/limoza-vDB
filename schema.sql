@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS lve_cvss (
 CREATE INDEX IF NOT EXISTS idx_lve_cvss_score ON lve_cvss (score DESC);
 
 -- ── CWEs ──────────────────────────────────────────────────────────────────────
+-- Per-LVE weakness references: "this LVE is CWE-NNN, according to source X".
 CREATE TABLE IF NOT EXISTS lve_cwes (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
@@ -91,6 +92,29 @@ CREATE TABLE IF NOT EXISTS lve_cwes (
     source       TEXT NOT NULL,
     advisory_ref TEXT,
     UNIQUE (lve_id, cwe_id, source)
+);
+
+-- ── CWE Dictionary ─────────────────────────────────────────────────────────────
+-- Shared weakness definitions (one row per CWE, ~940 total), enriched from the
+-- CWE-CAPEC json_repo/W/*.json clone. Populated on-reference: whenever an
+-- lve_cwes row is written, the full definition for that cwe_id is upserted here.
+-- lve_cwes.cwe_id references this loosely — NO foreign key, because sources may
+-- cite CWE ids absent from the synced Weakness set (categories, CWE-NVD-noinfo).
+-- The rich fields exist so an LLM can author mitigation guidance from the DB alone.
+CREATE TABLE IF NOT EXISTS cwe (
+    cwe_id                  TEXT PRIMARY KEY,        -- "CWE-79"
+    name                    TEXT,                    -- weakness name
+    abstraction             TEXT,                    -- Base / Variant / Class / Pillar
+    description             TEXT,                    -- short Description
+    extended_description    TEXT,                    -- ExtendedDescription
+    likelihood_of_exploit   TEXT,                    -- High / Medium / Low
+    common_consequences     JSONB,                   -- [{scope[], impact[], note}]
+    potential_mitigations   JSONB,                   -- [{phase[], strategy, description, effectiveness}]
+    modes_of_introduction   JSONB,                   -- [{phase, note}]
+    detection_methods       JSONB,                   -- [{method, description, effectiveness}]
+    related_attack_patterns JSONB,                   -- ["CAPEC-63", ...]
+    related_weaknesses      JSONB,                   -- [{nature, cwe_id, view_id}]
+    synced_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ── References ────────────────────────────────────────────────────────────────
