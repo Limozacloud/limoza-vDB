@@ -1,0 +1,18 @@
+{
+  "jobs": [
+    {
+      "name": "daily",
+      "sync":   ["nvd", "redhat", "suse", "ubuntu", "debian", "alpine",
+                 "almalinux", "rocky", "oracle", "microsoft",
+                 "epss", "cisa_kev", "cisa_ssvc", "bsi", "nuclei"],
+      "import": ["nvd", "redhat", "suse", "ubuntu", "debian", "alpine",
+                 "almalinux", "rocky", "oracle", "microsoft",
+                 "epss", "cisa_kev", "cisa_ssvc", "bsi", "nuclei"]
+    },
+    {
+      "name": "weekly",
+      "sync":   ["exploitdb", "metasploit", "poc_github", "ghsa", "osv"],
+      "import": ["exploitdb", "metasploit", "poc_github", "ghsa", "osv"]
+    }
+  ]
+}

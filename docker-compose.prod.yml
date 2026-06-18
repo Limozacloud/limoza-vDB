@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env
+    # No ports exposed — only reachable from within the Docker network.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  ingest:
+    build: .
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED:        "1"
+      POSTGRES_DSN:            postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NVD_DIR:                 /data/nvd
+      REDHAT_DIR:              /data/redhat
+      SUSE_VEX_DIR:            /data/suse-vex
+      EPSS_DIR:                /data/epss
+      CISA_SSVC_DIR:           /data/cisa-ssvc
+      BSI_DIR:                 /data/bsi
+      CISA_KEV_DIR:            /data/cisa-kev
+      EXPLOITDB_DIR:           /data/exploitdb
+      NUCLEI_DIR:              /data/nuclei
+      POC_GITHUB_DIR:          /data/poc-github
+      GHSA_DIR:                /data/ghsa
+      METASPLOIT_DIR:          /data/metasploit
+      MSRC_DIR:                /data/msrc
+      CPE_DIR:                 /data/cpe
+      UBUNTU_USN_DIR:          /data/ubuntu-usn
+      ORACLE_OVAL_DIR:         /data/oracle-oval
+      DEBIAN_TRACKER_DIR:      /data/debian-tracker
+      ALPINE_SECDB_DIR:        /data/alpine-secdb
+      ALMALINUX_ERRATA_DIR:    /data/almalinux-errata
+      ROCKY_ERRATA_DIR:        /data/rocky-errata
+      OSV_DIR:                 /data/osv
+      CWE_DB_DIR:              /data/cwe-db
+      SCHEDULE_CONFIG:         /config/schedule.json
+      # Proxy forwarded from .env into the container.
+      HTTP_PROXY:              ${HTTP_PROXY:-}
+      HTTPS_PROXY:             ${HTTPS_PROXY:-}
+      NO_PROXY:                ${NO_PROXY:-localhost,127.0.0.1,postgres}
+    volumes:
+      - nvd:/data/nvd
+      - redhat:/data/redhat
+      - suse_vex:/data/suse-vex
+      - epss:/data/epss
+      - cisa_ssvc:/data/cisa-ssvc
+      - bsi:/data/bsi
+      - cisa_kev:/data/cisa-kev
+      - exploitdb:/data/exploitdb
+      - nuclei:/data/nuclei
+      - poc_github:/data/poc-github
+      - ghsa:/data/ghsa
+      - metasploit:/data/metasploit
+      - msrc:/data/msrc
+      - cpe:/data/cpe
+      - ubuntu_usn:/data/ubuntu-usn
+      - oracle_oval:/data/oracle-oval
+      - debian_tracker:/data/debian-tracker
+      - alpine_secdb:/data/alpine-secdb
+      - almalinux_errata:/data/almalinux-errata
+      - rocky_errata:/data/rocky-errata
+      - osv:/data/osv
+      - cwe_db:/data/cwe-db
+      - ./config/schedule.json:/config/schedule.json:ro
+    depends_on:
+      - postgres
+    profiles:
+      - ingest
+
+  hasura:
+    image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
+    env_file: .env
+    ports:
+      - "8080:8080"
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_GRAPHQL_ENABLE_CONSOLE:    "false"
+      HASURA_GRAPHQL_ADMIN_SECRET:      ${HASURA_ADMIN_SECRET}
+      HASURA_GRAPHQL_JWT_SECRET:        '{"type":"HS256","key":"${HASURA_JWT_SECRET}"}'
+      HASURA_GRAPHQL_UNAUTHORIZED_ROLE: anonymous
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  nvd:
+  redhat:
+  suse_vex:
+  epss:
+  cisa_ssvc:
+  bsi:
+  cisa_kev:
+  exploitdb:
+  nuclei:
+  poc_github:
+  ghsa:
+  metasploit:
+  msrc:
+  cpe:
+  ubuntu_usn:
+  oracle_oval:
+  debian_tracker:
+  alpine_secdb:
+  almalinux_errata:
+  rocky_errata:
+  osv:
+  cwe_db:

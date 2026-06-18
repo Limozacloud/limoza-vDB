@@ -1,0 +1,133 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    env_file: .env
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  ingest:
+    build: .
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED:        "1"
+      POSTGRES_DSN:            postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NVD_DIR:                 /data/nvd
+      REDHAT_DIR:              /data/redhat
+      SUSE_VEX_DIR:            /data/suse-vex
+      EPSS_DIR:                /data/epss
+      CISA_SSVC_DIR:           /data/cisa-ssvc
+      BSI_DIR:                 /data/bsi
+      CISA_KEV_DIR:            /data/cisa-kev
+      EXPLOITDB_DIR:           /data/exploitdb
+      NUCLEI_DIR:              /data/nuclei
+      POC_GITHUB_DIR:          /data/poc-github
+      GHSA_DIR:                /data/ghsa
+      METASPLOIT_DIR:          /data/metasploit
+      MSRC_DIR:                /data/msrc
+      CPE_DIR:                 /data/cpe
+      PKG_INDEX_DIR:           /data/pkg-index
+      UBUNTU_USN_DIR:          /data/ubuntu-usn
+      ORACLE_OVAL_DIR:         /data/oracle-oval
+      DEBIAN_TRACKER_DIR:      /data/debian-tracker
+      ALPINE_SECDB_DIR:        /data/alpine-secdb
+      ALMALINUX_ERRATA_DIR:    /data/almalinux-errata
+      ROCKY_ERRATA_DIR:        /data/rocky-errata
+      OSV_DIR:                 /data/osv
+      CWE_DB_DIR:              /data/cwe-db
+      PKG_REPOS_CONFIG:        /config/pkg_repos.json
+      SCHEDULE_CONFIG:         /config/schedule.json
+    volumes:
+      - nvd:/data/nvd
+      - redhat:/data/redhat
+      - suse_vex:/data/suse-vex
+      - epss:/data/epss
+      - cisa_ssvc:/data/cisa-ssvc
+      - bsi:/data/bsi
+      - cisa_kev:/data/cisa-kev
+      - exploitdb:/data/exploitdb
+      - nuclei:/data/nuclei
+      - poc_github:/data/poc-github
+      - ghsa:/data/ghsa
+      - metasploit:/data/metasploit
+      - msrc:/data/msrc
+      - cpe:/data/cpe
+      - pkg_index:/data/pkg-index
+      - ubuntu_usn:/data/ubuntu-usn
+      - oracle_oval:/data/oracle-oval
+      - debian_tracker:/data/debian-tracker
+      - alpine_secdb:/data/alpine-secdb
+      - almalinux_errata:/data/almalinux-errata
+      - rocky_errata:/data/rocky-errata
+      - osv:/data/osv
+      - cwe_db:/data/cwe-db
+      - ./config/pkg_repos.json:/config/pkg_repos.json:ro
+      - ./config/schedule.json:/config/schedule.json:ro
+    depends_on:
+      - postgres
+    profiles:
+      - ingest
+
+  hasura:
+    image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
+    ports:
+      - "8080:8080"
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_GRAPHQL_ENABLE_CONSOLE:    "true"
+      HASURA_GRAPHQL_ADMIN_SECRET:      ${HASURA_ADMIN_SECRET:-changeme}
+      HASURA_GRAPHQL_JWT_SECRET:        '{"type":"HS256","key":"${HASURA_JWT_SECRET:-set-HASURA_JWT_SECRET-in-env-file}"}'
+      HASURA_GRAPHQL_UNAUTHORIZED_ROLE: anonymous
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/ofelia.ini:/etc/ofelia/config.ini:ro
+    command: daemon --config=/etc/ofelia/config.ini
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  nvd:
+  redhat:
+  suse_vex:
+  epss:
+  cisa_ssvc:
+  bsi:
+  cisa_kev:
+  exploitdb:
+  nuclei:
+  poc_github:
+  ghsa:
+  metasploit:
+  msrc:
+  cpe:
+  pkg_index:
+  ubuntu_usn:
+  oracle_oval:
+  debian_tracker:
+  alpine_secdb:
+  almalinux_errata:
+  rocky_errata:
+  osv:
+  cwe_db:
