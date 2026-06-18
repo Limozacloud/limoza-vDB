@@ -244,7 +244,11 @@ CREATE TABLE IF NOT EXISTS lve_history (
     detail    TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lve_history_unique ON lve_history (lve_id, date, event, source);
+-- detail is part of the key so per-advisory / per-package events that share the
+-- same (date, event, source) — e.g. several advisory_added rows from one import —
+-- coexist instead of colliding. COALESCE keeps NULL-detail events idempotent
+-- (a bare nullable column would be treated as NULLS DISTINCT).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lve_history_unique ON lve_history (lve_id, date, event, source, COALESCE(detail, ''));
 CREATE INDEX IF NOT EXISTS idx_lve_history_lve_id ON lve_history (lve_id, date DESC);
 
 -- ── Migrations ────────────────────────────────────────────────────────────────

@@ -367,6 +367,7 @@ def upsert_lve_record(cur, r: dict) -> None:
                 INSERT INTO lve_history
                     (lve_id, date, event, source, detail)
                 VALUES %s
+                ON CONFLICT DO NOTHING
             """, [(lve_id, h["date"], h["event"], h["source"], h.get("detail"))
                   for h in new_vendor_hist])
 
@@ -426,6 +427,7 @@ def upsert_lve_record(cur, r: dict) -> None:
                 INSERT INTO lve_history
                     (lve_id, date, event, source, detail)
                 VALUES %s
+                ON CONFLICT DO NOTHING
             """, [(lve_id, h["date"], h["event"], h["source"], h.get("detail"))
                   for h in diff_history])
     # ─────────────────────────────────────────────────────────────────────────
