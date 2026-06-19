@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 
 from ingest.db import upsert_lve_record
+from ingest.incremental import ImportState
 from ingest.redhat.transform import transform, transform_advisory
 
 
-def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
+def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None:
     base = Path(dirs["redhat"])
     vex_base = base / "vex"
     adv_base = base / "advisories"
@@ -14,6 +15,8 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     if not vex_base.exists():
         print(f"  RedHat: {vex_base} not found — run `sync redhat` first")
         return
+
+    state = ImportState(base / ".import_state.json", base)
 
     # ── VEX import ────────────────────────────────────────────────────────────
     if cve_filter:
@@ -23,8 +26,9 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         vex_files = [f] if f.exists() else []
         print(f"  RedHat VEX: filter {cve_filter} → {len(vex_files)} files")
     else:
-        vex_files = sorted(vex_base.rglob("cve-*.json"))
-        print(f"  RedHat VEX: {len(vex_files)} CVE files")
+        all_vex   = sorted(vex_base.rglob("cve-*.json"))
+        vex_files = state.changed(all_vex, full=full)
+        print(f"  RedHat VEX: {len(vex_files)} changed of {len(all_vex)} CVE files")
 
     total = skipped = errors = 0
 
@@ -38,11 +42,13 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
                 if record is None:
                     skipped += 1
                     cur.execute("RELEASE SAVEPOINT sp")
+                    state.mark(f)
                     continue
 
                 upsert_lve_record(cur, record)
                 total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
+                state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 errors += 1
@@ -59,6 +65,8 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     # ── Advisory import ───────────────────────────────────────────────────────
     if not adv_base.exists():
         print(f"  RedHat advisories: {adv_base} not found — skipping")
+        if not cve_filter:
+            state.commit()
         return
 
     if cve_filter:
@@ -79,9 +87,12 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
             if p.exists():
                 adv_files.append(p)
     else:
-        adv_files = sorted(adv_base.rglob("rhsa-*.json"))
+        all_adv   = sorted(adv_base.rglob("rhsa-*.json"))
+        adv_files = state.changed(all_adv, full=full)
+        print(f"  RedHat advisories: {len(adv_files)} changed of {len(all_adv)} files")
 
-    print(f"  RedHat advisories: {len(adv_files)} files")
+    if cve_filter:
+        print(f"  RedHat advisories: {len(adv_files)} files")
     adv_total = adv_errors = 0
 
     with conn.cursor() as cur:
@@ -143,6 +154,7 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
 
                 adv_total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
+                state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 adv_errors += 1
@@ -154,4 +166,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
                 print(f"  advisories {i+1}/{len(adv_files)}")
 
     conn.commit()
+    if not cve_filter:
+        state.commit()
     print(f"  RedHat advisories: {adv_total} processed · {adv_errors} errors")

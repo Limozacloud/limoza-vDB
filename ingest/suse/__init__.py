@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from ingest.db import upsert_lve_record
+from ingest.incremental import ImportState
 from ingest.suse.transform import transform, transform_advisory
 
 
@@ -20,13 +21,14 @@ def _load_adv_map(base: Path) -> dict:
     return {}
 
 
-def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
+def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None:
     base = Path(dirs["suse_vex"])
     if not base.exists():
         print(f"  SUSE: {base} not found — run `sync suse` first")
         return
 
     adv_map = _load_adv_map(base)
+    state   = ImportState(base / ".import_state.json", base)
 
     # ── VEX import ────────────────────────────────────────────────────────────
     if cve_filter:
@@ -35,8 +37,9 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         files = [found] if found else []
         print(f"  SUSE VEX: filter {cve_filter} → {len(files)} files")
     else:
-        files = sorted(base.rglob("cve-*.json"))
-        print(f"  SUSE VEX: {len(files)} CVE files")
+        all_files = sorted(base.rglob("cve-*.json"))
+        files     = state.changed(all_files, full=full)
+        print(f"  SUSE VEX: {len(files)} changed of {len(all_files)} CVE files")
 
     total = skipped = errors = 0
 
@@ -50,11 +53,13 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
                 if record is None:
                     skipped += 1
                     cur.execute("RELEASE SAVEPOINT sp")
+                    state.mark(f)
                     continue
 
                 upsert_lve_record(cur, record)
                 total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
+                state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 errors += 1
@@ -72,6 +77,8 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     adv_base = base / "advisories"
     if not adv_base.exists():
         print(f"  SUSE advisories: {adv_base} not found — skipping (run `sync suse` to populate)")
+        if not cve_filter:
+            state.commit()
         return
 
     if cve_filter:
@@ -88,9 +95,12 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
             if p.exists():
                 adv_files.append(p)
     else:
-        adv_files = sorted(adv_base.glob("*.json"))
+        all_adv   = sorted(adv_base.glob("*.json"))
+        adv_files = state.changed(all_adv, full=full)
+        print(f"  SUSE advisories: {len(adv_files)} changed of {len(all_adv)} files")
 
-    print(f"  SUSE advisories: {len(adv_files)} files")
+    if cve_filter:
+        print(f"  SUSE advisories: {len(adv_files)} files")
     adv_total = adv_errors = 0
 
     with conn.cursor() as cur:
@@ -137,6 +147,7 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
 
                 adv_total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
+                state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 adv_errors += 1
@@ -148,4 +159,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
                 print(f"  advisories {i+1}/{len(adv_files)}")
 
     conn.commit()
+    if not cve_filter:
+        state.commit()
     print(f"  SUSE advisories: {adv_total} processed · {adv_errors} errors")

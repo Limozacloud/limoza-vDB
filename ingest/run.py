@@ -74,6 +74,7 @@ EXAMPLES
   docker compose run --rm ingest import all
 
 """
+import inspect
 import json
 import os
 import sys
@@ -279,6 +280,9 @@ def main():
                 sys.exit(1)
             cve_filter = args[idx + 1]
             print(f"Filter: {cve_filter}")
+        full = "--full" in args
+        if full:
+            print("Full re-import (ignoring incremental state)")
         vendor_args = [a for a in args[1:] if not a.startswith("--") and a != cve_filter]
 
         targets = vendor_args if vendor_args else list(VENDORS.keys())
@@ -296,8 +300,11 @@ def main():
             print(f"\n── {v} ──")
             conn = get_conn()
             try:
+                kwargs = {"cve_filter": cve_filter}
+                if "full" in inspect.signature(VENDORS[v]).parameters:
+                    kwargs["full"] = full
                 with timer_step(f"import {v}"):
-                    VENDORS[v](conn, DIRS, cve_filter=cve_filter)
+                    VENDORS[v](conn, DIRS, **kwargs)
             finally:
                 conn.close()
         timer_summary()
