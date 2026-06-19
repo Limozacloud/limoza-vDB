@@ -32,7 +32,7 @@ Vulnerability[]/                      (one or more LVE records produced per vuln
 ├── Notes[?Type==2].Value | [0]
 │   ├── (HTML-stripped)               ✅ → descriptions[].value
 │   └── (CVE-regex scan, ADV only)    ✅ → aliases[] expansion (see CVE above)
-├── CWE.{ID,Value}                    ✅ → cwes[].{id,name}  (advisory = advisory id)
+├── CWE.ID                            ✅ → cwes[].id  (advisory = advisory id)
 ├── CVSSScoreSets[]/
 │   ├── BaseScore                     ✅ → cvss[].score
 │   ├── Vector                        ✅ → cvss[].vector + cvss[].version (parsed from "CVSS:x.y/..." prefix, default 3.1)

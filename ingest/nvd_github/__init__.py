@@ -7,12 +7,20 @@ A CVE that errors out is left out of the snapshot, so it retries on the next run
 
 Per-CVE files are the raw NVD CVE object — identical to what the API-based `nvd`
 sync stored — so we reuse the existing NVD transform unchanged.
+
+Parallel import: targets are split into N_WORKERS chunks; each worker opens its own
+DB connection and commits every COMMIT_EVERY CVEs. Workers are independent (each CVE
+ID appears exactly once in the target list) so there are no write conflicts.
 """
 import csv
+import multiprocessing as mp
+import os
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
 from ingest.nvd.transform import parse, transform
+
+COMMIT_EVERY = 2_000
+N_WORKERS    = 8
 
 
 def _load_state(path: Path) -> dict:
@@ -39,6 +47,47 @@ def _write_snapshot(path: Path, state: dict) -> None:
             w.writerow([cve, sha])
 
 
+def _import_chunk(args):
+    """Worker process: import one chunk of CVEs.
+
+    Returns (done_dict, total, errors, missing).
+    Imports inside the function to work correctly under both fork and spawn.
+    """
+    chunk, base_str, dsn, current_hashes = args
+
+    import psycopg2
+    from ingest.db import upsert_lve_record
+
+    base  = Path(base_str)
+    conn  = psycopg2.connect(dsn)
+    total = errors = missing = 0
+    done  = {}
+
+    with conn.cursor() as cur:
+        for i, cve in enumerate(chunk):
+            f = _path_for(base, cve)
+            if not f.exists():
+                missing += 1
+                continue
+            try:
+                cur.execute("SAVEPOINT sp")
+                for record in transform(parse(f.read_bytes())):
+                    upsert_lve_record(cur, record)
+                    total += 1
+                cur.execute("RELEASE SAVEPOINT sp")
+                done[cve] = current_hashes[cve]
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT sp")
+                errors += 1
+
+            if (i + 1) % COMMIT_EVERY == 0:
+                conn.commit()
+
+    conn.commit()
+    conn.close()
+    return done, total, errors, missing
+
+
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     base      = Path(dirs["nvd_github"])
     state_csv = base / "_state.csv"
@@ -55,47 +104,60 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         print(f"  NVD-GitHub: filter {cve_filter} → {len(targets)} file(s)")
     elif prev:
         targets = [c for c, h in current.items() if prev.get(c) != h]
-        print(f"  NVD-GitHub: {len(targets)} changed/new of {len(current)} CVEs")
+        print(f"  NVD-GitHub: {len(targets):,} changed/new of {len(current):,} CVEs")
     else:
         targets = list(current)
-        print(f"  NVD-GitHub: first import — {len(targets)} CVEs")
+        print(f"  NVD-GitHub: first import — {len(targets):,} CVEs")
 
-    total = errors = missing = 0
-    done: dict = {}  # cve -> sha256 successfully imported this run
+    if not targets:
+        print("  NVD-GitHub: nothing to import")
+        return
 
-    with conn.cursor() as cur:
-        for i, cve in enumerate(targets):
-            f = _path_for(base, cve)
-            if not f.exists():
-                missing += 1
-                continue
+    # Single-CVE filter: use the passed connection directly, no multiprocessing
+    if cve_filter:
+        f = _path_for(base, targets[0])
+        if not f.exists():
+            print(f"  NVD-GitHub: file not found for {cve_filter}")
+            return
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT sp")
             try:
-                cur.execute("SAVEPOINT sp")
                 for record in transform(parse(f.read_bytes())):
                     upsert_lve_record(cur, record)
-                    total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
-                done[cve] = current[cve]
+                print(f"  NVD-GitHub: imported {cve_filter}")
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error {cve}: {e}")
+                print(f"  Error {cve_filter}: {e}")
+        conn.commit()
+        return
 
-            if not cve_filter and (i + 1) % 10_000 == 0:
-                conn.commit()
-                print(f"  {i+1}/{len(targets)} ({total} CVEs)")
+    # Parallel import
+    dsn       = os.environ["POSTGRES_DSN"]
+    n_workers = min(N_WORKERS, mp.cpu_count(), len(targets))
+    chunk_size = (len(targets) + n_workers - 1) // n_workers
+    chunks     = [targets[i:i + chunk_size] for i in range(0, len(targets), chunk_size)]
 
-    conn.commit()
+    print(f"  NVD-GitHub: {n_workers} workers · ~{chunk_size:,} CVEs each · commit every {COMMIT_EVERY:,}")
 
-    msg = f"  NVD-GitHub: {total} CVEs ingested · {errors} errors"
+    worker_args = [(chunk, str(base), dsn, current) for chunk in chunks]
+
+    with mp.Pool(n_workers) as pool:
+        results = pool.map(_import_chunk, worker_args)
+
+    total = errors = missing = 0
+    done  = {}
+    for worker_done, worker_total, worker_errors, worker_missing in results:
+        total   += worker_total
+        errors  += worker_errors
+        missing += worker_missing
+        done.update(worker_done)
+
+    msg = f"  NVD-GitHub: {total:,} CVEs ingested · {errors} errors"
     if missing:
         msg += f" · {missing} missing files"
     print(msg)
 
-    # Advance the import manifest: carry prev forward, overwrite with this run's
-    # successes. Errored/missing CVEs keep their old hash and retry next time.
-    if not cve_filter:
-        prev.update(done)
-        _write_snapshot(snapshot, prev)
-        print(f"  NVD-GitHub: import manifest updated ({len(prev)} CVEs tracked)")
+    prev.update(done)
+    _write_snapshot(snapshot, prev)
+    print(f"  NVD-GitHub: import manifest updated ({len(prev):,} CVEs tracked)")

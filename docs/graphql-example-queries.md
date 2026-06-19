@@ -48,7 +48,6 @@ query FullCVEScan($cve_id: String!) {
       }
       cwes {
         cwe_id
-        name
         source
         cwe {
           abstraction
