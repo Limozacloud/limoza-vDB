@@ -264,7 +264,6 @@
         "required": ["id", "source"],
         "properties": {
           "id":       { "type": "string", "description": "CWE id; joins to the cwe dictionary table for the full weakness definition.", "examples": ["CWE-122"] },
-          "name":     { "type": ["string", "null"], "description": "Human-readable name when provided by source; otherwise filled from the CWE dictionary." },
           "source":   { "type": "string", "examples": ["nvd", "microsoft", "redhat"] },
           "advisory": { "$ref": "#/$defs/advisory_ref" }
         }

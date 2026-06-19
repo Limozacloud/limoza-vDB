@@ -1,14 +1,12 @@
 # CWE Dictionary
 
 The CWE (Common Weakness Enumeration) dictionary is a **reference source**, not a
-per-CVE source. It does **not** produce LVE records of its own. It serves two purposes:
+per-CVE source. It does **not** produce LVE records of its own. It serves one purpose:
 
-1. **Name fallback** — fills `lve_cwes.name` when a per-CVE source supplies a CWE id but
-   no human-readable name.
-2. **Weakness definitions** — populates the shared `cwe` dictionary table with the full
-   definition of every referenced weakness (mitigations, consequences, likelihood, …) so
-   downstream consumers (including an LLM authoring mitigation guidance) have the complete
-   context from the database alone.
+- **Weakness definitions** — populates the shared `cwe` dictionary table with the full
+  definition of every weakness (mitigations, consequences, likelihood, …) so
+  downstream consumers (including an LLM authoring mitigation guidance) have the complete
+  context from the database alone.
 
 ## CWE-CAPEC REST-API-wg (json_repo/W)
 - **URL:** `https://github.com/CWE-CAPEC/REST-API-wg`
@@ -46,42 +44,23 @@ All other fields (DemonstrativeExamples, ObservedExamples, TaxonomyMappings, Ref
 ContentHistory, …) are not read. Files that fail to parse are silently skipped. If
 `json_repo/W` does not exist, the lookup is an empty map.
 
-## What it produces and how it is consumed
+## Import
 
-Two accessors, both keyed by `CWE-NNN`:
-
-- `ingest.cwe.lookup(cwe_id, dirs)` → the weakness **name**, or `None` if not in the
-  dictionary.
-- `ingest.cwe.lookup_detail(cwe_id, dirs)` → the **full definition** dict (the column shape
-  above), or `None` if not in the dictionary.
-
-The consumer is the database writer (`ingest/db.py`). When inserting `lve_cwes` rows for an
-LVE it does two things per referenced CWE:
-
-1. **Name fallback** — the name written to `lve_cwes.name` is
-   `c.get("name") or _cwe_name(c["id"])`: the source-supplied name if present, otherwise the
-   dictionary name.
-2. **On-reference enrichment** — for each referenced `cwe_id`, the full definition from
-   `lookup_detail()` is upserted into the shared `cwe` table (`ON CONFLICT (cwe_id) DO
-   UPDATE`). Ids absent from the local clone yield no detail and are skipped. A given LVE may
-   cite the same CWE from several sources; the upsert is deduped by `cwe_id`.
-
-The lookup directory comes from the `CWE_DB_DIR` environment variable.
+Run `import cwe` **before** other vendor imports. It bulk-inserts all ~940 weakness
+definitions into the `cwe` table in a single pass. Subsequent vendor imports
+(`nvd-github`, `redhat`, etc.) write only `cwe_id` references to `lve_cwes` — no
+CWE detail lookup or insertion happens during those imports.
 
 ## Notes
-- This is enrichment-only: it never creates `lve_cwes` rows. It supplies the fallback `name`
-  for rows other sources emit, and it owns the `cwe` dictionary table.
-- The `cwe` table is populated **on-reference** — only weaknesses actually cited by an
-  ingested LVE land in the table, not the whole CWE catalogue.
 - `lve_cwes.cwe_id` references `cwe.cwe_id` loosely; there is **no** foreign key, because
   sources occasionally cite ids outside the synced Weakness set (categories, `CWE-NVD-*`).
   In Hasura the relationship `lve_cwes → cwe` is configured as a manual relationship.
 - Only `json_repo/W/` (Weaknesses) is synced — Categories, Views, and CAPEC data in the
   upstream repo are not fetched.
-- The lookup map is cached on first use for the lifetime of the ingest process.
+- The in-memory map is cached on first use for the lifetime of the ingest process.
 
 ## Schema Coverage
 
-Owns the `cwe` dictionary table (one row per referenced weakness) and supplies the fallback
-`name` value for `lve_cwes` rows whose id and source come from other datasources. It does not
-own any LVE record fields.
+Owns the `cwe` dictionary table (one row per weakness, ~940 total). Vendor imports
+reference CWE ids via `lve_cwes.cwe_id`; the full definition is obtained by joining
+`lve_cwes → cwe` on `cwe_id`.

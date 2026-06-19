@@ -84,11 +84,12 @@ CREATE INDEX IF NOT EXISTS idx_lve_cvss_score ON lve_cvss (score DESC);
 
 -- ── CWEs ──────────────────────────────────────────────────────────────────────
 -- Per-LVE weakness references: "this LVE is CWE-NNN, according to source X".
+-- The human-readable name is not stored here — join to the cwe dictionary table
+-- via cwe_id to get name, description, mitigations, etc.
 CREATE TABLE IF NOT EXISTS lve_cwes (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
     cwe_id       TEXT NOT NULL,
-    name         TEXT,
     source       TEXT NOT NULL,
     advisory_ref TEXT,
     UNIQUE (lve_id, cwe_id, source)

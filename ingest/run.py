@@ -82,6 +82,7 @@ from pathlib import Path
 from ingest.db import get_conn, sync_schema
 from ingest.utils import timer_start, timer_step, timer_summary
 from ingest import nvd, nvd_github, epss, microsoft, bsi, ghsa, osv
+from ingest import cwe as _cwe_vendor
 from ingest import cisa_kev as _cisa_kev_vendor
 from ingest import cisa_ssvc
 from ingest import exploitdb, poc_github, nuclei, metasploit
@@ -115,6 +116,8 @@ from ingest.osv       import sync as _s_osv
 from ingest.osv       import compare as _osv_compare
 
 VENDORS = {
+    # 0. Reference data (run before CVE imports)
+    "cwe":          _cwe_vendor.ingest,
     # 1. CVE base
     "nvd":          nvd.ingest,
     "nvd-github":   nvd_github.ingest,

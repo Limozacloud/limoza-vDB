@@ -42,8 +42,7 @@ vulnerabilities[]/
 ├── cve                               ✅ → cve.cve_id
 ├── title                             ✅ → titles[].value
 ├── cwe/
-│   ├── id                            ✅ → cwes[].id
-│   └── name                          ✅ → cwes[].name
+│   └── id                            ✅ → cwes[].id
 ├── notes[]/
 │   ├── [category=description|general].text  ✅ → descriptions[].value
 │   └── [category=other].text         ✅ → impacts[].value  (vendor statement)
