@@ -51,7 +51,7 @@ _PROGRESS_EVERY = 5_000
 
 
 def _import_chunk(args):
-    """Worker process: import one chunk of CVEs.
+    """Worker process: import one chunk of CVEs using RecordBatch for bulk child-table inserts.
 
     Returns (done_dict, total, errors, missing).
     Imports inside the function to work correctly under both fork and spawn.
@@ -59,12 +59,15 @@ def _import_chunk(args):
     chunk, base_str, dsn, current_hashes, worker_id = args
 
     import psycopg2
-    from ingest.db import upsert_lve_record
+    from ingest.db import RecordBatch
 
     base  = Path(base_str)
     conn  = psycopg2.connect(dsn)
     total = errors = missing = 0
     done  = {}
+
+    batch      = RecordBatch()
+    batch_cves = []
 
     with conn.cursor() as cur:
         for i, cve in enumerate(chunk):
@@ -73,23 +76,43 @@ def _import_chunk(args):
                 missing += 1
                 continue
             try:
-                cur.execute("SAVEPOINT sp")
-                for record in transform(parse(f.read_bytes())):
-                    upsert_lve_record(cur, record)
-                    total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-                done[cve] = current_hashes[cve]
+                records = list(transform(parse(f.read_bytes())))
+                for record in records:
+                    batch.add(cur, record)
+                batch_cves.append(cve)
+                total += len(records)
             except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
                 errors += 1
+                if errors <= 3:
+                    print(f"  [w{worker_id}] Error {cve}: {e}", flush=True)
 
             if (i + 1) % COMMIT_EVERY == 0:
-                conn.commit()
+                try:
+                    batch.flush(cur)
+                    conn.commit()
+                    for c in batch_cves:
+                        done[c] = current_hashes[c]
+                    batch_cves.clear()
+                except Exception as e:
+                    conn.rollback()
+                    errors += len(batch_cves)
+                    print(f"  [w{worker_id}] Flush error at {i+1:,}: {e}", flush=True)
+                    batch._clear()
+                    batch_cves.clear()
 
             if (i + 1) % _PROGRESS_EVERY == 0:
                 print(f"  [w{worker_id}] {i+1:,}/{len(chunk):,}", flush=True)
 
-    conn.commit()
+        try:
+            batch.flush(cur)
+            conn.commit()
+            for c in batch_cves:
+                done[c] = current_hashes[c]
+        except Exception as e:
+            conn.rollback()
+            errors += len(batch_cves)
+            print(f"  [w{worker_id}] Final flush error: {e}", flush=True)
+
     conn.close()
     return done, total, errors, missing
 
@@ -121,15 +144,18 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
 
     # Single-CVE filter: use the passed connection directly, no multiprocessing
     if cve_filter:
+        from ingest.db import RecordBatch
         f = _path_for(base, targets[0])
         if not f.exists():
             print(f"  NVD-GitHub: file not found for {cve_filter}")
             return
+        batch = RecordBatch()
         with conn.cursor() as cur:
             cur.execute("SAVEPOINT sp")
             try:
                 for record in transform(parse(f.read_bytes())):
-                    upsert_lve_record(cur, record)
+                    batch.add(cur, record)
+                batch.flush(cur)
                 cur.execute("RELEASE SAVEPOINT sp")
                 print(f"  NVD-GitHub: imported {cve_filter}")
             except Exception as e:
