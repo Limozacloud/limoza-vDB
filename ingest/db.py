@@ -291,29 +291,44 @@ def clear_lve_cache() -> None:
 
 
 def _get_or_create_lve(cur, aliases: list) -> tuple:
-    """Find existing LVE by alias overlap, or create a new one. Returns (lve_id, is_new).
-    Lookup uses only CVE-format aliases to avoid merging unrelated LVEs that share an ADV.
-    Results are cached in-process to avoid repeated DB round-trips for the same CVE."""
-    for alias in aliases:
+    """Find existing LVE or create one. Returns (lve_id, is_new).
+
+    Lookup order:
+      1. In-process cache (CVE IDs only — advisory IDs like SUSE-SU-... are shared
+         across many CVEs and must not be used as cache keys)
+      2. lve_cve.cve_id  — fast B-Tree lookup; populated by NVD which always runs first
+      3. lve.aliases &&  — fallback for reserved CVEs not yet in lve_cve
+    """
+    cve_ids   = [a for a in aliases if a.startswith("CVE-")]
+    cache_keys = cve_ids or aliases   # use all aliases only when no CVE IDs present
+
+    for alias in cache_keys:
         if alias in _lve_id_cache:
             return _lve_id_cache[alias], False
 
-    lookup = [a for a in aliases if a.startswith("CVE-")] or aliases
-    if lookup:
-        cur.execute(
-            "SELECT lve_id FROM lve WHERE aliases && %s::text[]",
-            (lookup,)
-        )
+    lve_id = None
+
+    if cve_ids:
+        cur.execute("SELECT lve_id FROM lve_cve WHERE cve_id = ANY(%s) LIMIT 1", (cve_ids,))
         row = cur.fetchone()
         if row:
             lve_id = row[0]
-            for alias in aliases:
-                _lve_id_cache[alias] = lve_id
-            return lve_id, False
+
+    if lve_id is None:
+        lookup = cve_ids or aliases
+        cur.execute("SELECT lve_id FROM lve WHERE aliases && %s::text[]", (lookup,))
+        row = cur.fetchone()
+        if row:
+            lve_id = row[0]
+
+    if lve_id is not None:
+        for alias in cache_keys:
+            _lve_id_cache[alias] = lve_id
+        return lve_id, False
 
     cur.execute("INSERT INTO lve (lve_id, aliases) VALUES (NULL, %s) RETURNING lve_id", (aliases,))
     lve_id = cur.fetchone()[0]
-    for alias in aliases:
+    for alias in cache_keys:
         _lve_id_cache[alias] = lve_id
     return lve_id, True
 
