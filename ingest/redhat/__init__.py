@@ -5,6 +5,7 @@ from pathlib import Path
 from ingest.db import ingest_files
 from ingest.incremental import ImportState
 from ingest.redhat.transform import transform, transform_advisory
+from psycopg2.extras import execute_values
 
 N_WORKERS = 4
 
@@ -69,73 +70,72 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
         adv_files = state.changed(all_adv, full=full)
         print(f"  RedHat advisories: {len(adv_files):,} changed of {len(all_adv):,} files")
 
+    # ── Parse all advisory files, then bulk-apply in 3 statements ────────────
     adv_total = adv_errors = 0
-    with conn.cursor() as cur:
-        for i, f in enumerate(adv_files):
-            try:
-                cur.execute("SAVEPOINT sp")
-                data    = json.loads(f.read_bytes())
-                records = transform_advisory(data)
+    all_records = []
+    for f in adv_files:
+        try:
+            records = transform_advisory(json.loads(f.read_bytes()))
+            all_records.extend(records)
+            adv_total += 1
+            if not cve_filter:
+                state.mark(f)
+        except Exception as e:
+            adv_errors += 1
+            if adv_errors <= 5:
+                print(f"  Error {f.name}: {e}")
 
-                for rec in records:
-                    cve_id  = rec["cve_id"]
-                    rhsa_id = rec["rhsa_id"]
+    if all_records:
+        all_cve_ids = list({r["cve_id"] for r in all_records})
+        with conn.cursor() as cur:
+            # Bulk-resolve cve_id → lve_id
+            cur.execute("""
+                SELECT lve_id, alias FROM lve
+                CROSS JOIN LATERAL unnest(aliases) AS t(alias)
+                WHERE alias = ANY(%s)
+            """, (all_cve_ids,))
+            cve_to_lve = {row[1]: row[0] for row in cur.fetchall()}
 
-                    cur.execute(
-                        "SELECT lve_id FROM lve WHERE %s = ANY(aliases) LIMIT 1",
-                        (cve_id,)
-                    )
-                    row = cur.fetchone()
-                    if not row:
-                        continue
-                    lve_id = row[0]
+            upd_rows     = []
+            title_rows   = []
+            history_rows = []
+            for rec in all_records:
+                lve_id = cve_to_lve.get(rec["cve_id"])
+                if not lve_id:
+                    continue
+                vendor_data = json.dumps({"reboot_required": True}) if rec.get("reboot_required") else None
+                upd_rows.append((rec["published"], rec["updated"], vendor_data, lve_id, rec["rhsa_id"]))
+                if rec["title"]:
+                    title_rows.append((lve_id, rec["title"], "redhat", rec["rhsa_id"]))
+                for h in rec.get("history") or []:
+                    history_rows.append((lve_id, h["date"], h["event"], h["source"], h.get("detail")))
 
-                    vendor_data = {}
-                    if rec.get("reboot_required"):
-                        vendor_data["reboot_required"] = True
-                    cur.execute("""
-                        UPDATE lve_advisories
-                        SET published   = COALESCE(%s, published),
-                            updated     = COALESCE(%s, updated),
-                            vendor_data = CASE
-                                WHEN %s::jsonb IS NOT NULL
-                                THEN COALESCE(vendor_data, '{}'::jsonb) || %s::jsonb
-                                ELSE vendor_data
-                            END
-                        WHERE lve_id = %s AND advisory_id = %s
-                    """, (rec["published"], rec["updated"],
-                          json.dumps(vendor_data) if vendor_data else None,
-                          json.dumps(vendor_data) if vendor_data else None,
-                          lve_id, rhsa_id))
+            if upd_rows:
+                execute_values(cur, """
+                    UPDATE lve_advisories
+                    SET published   = COALESCE(v.published::timestamptz, lve_advisories.published),
+                        updated     = COALESCE(v.updated::timestamptz,   lve_advisories.updated),
+                        vendor_data = CASE
+                            WHEN v.vendor_data::jsonb IS NOT NULL
+                            THEN COALESCE(lve_advisories.vendor_data, '{}'::jsonb) || v.vendor_data::jsonb
+                            ELSE lve_advisories.vendor_data
+                        END
+                    FROM (VALUES %s) AS v(published, updated, vendor_data, lve_id, advisory_id)
+                    WHERE lve_advisories.lve_id      = v.lve_id
+                      AND lve_advisories.advisory_id = v.advisory_id
+                """, upd_rows)
 
-                    if rec["title"]:
-                        cur.execute("""
-                            INSERT INTO lve_titles (lve_id, value, source, advisory_ref)
-                            VALUES (%s, %s, 'redhat', %s)
-                            ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET
-                                value = EXCLUDED.value
-                        """, (lve_id, rec["title"], rhsa_id))
+            if title_rows:
+                execute_values(cur, """
+                    INSERT INTO lve_titles (lve_id, value, source, advisory_ref) VALUES %s
+                    ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
+                """, title_rows)
 
-                    for h in rec.get("history") or []:
-                        cur.execute("""
-                            INSERT INTO lve_history (lve_id, date, event, source, detail)
-                            VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT DO NOTHING
-                        """, (lve_id, h["date"], h["event"], h["source"], h["detail"]))
-
-                adv_total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-                if not cve_filter:
-                    state.mark(f)
-            except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
-                adv_errors += 1
-                if adv_errors <= 5:
-                    print(f"  Error {f.name}: {e}")
-
-            if not cve_filter and (i + 1) % 2_000 == 0:
-                conn.commit()
-                print(f"  RedHat advisories: {i+1:,}/{len(adv_files):,}")
+            if history_rows:
+                execute_values(cur, """
+                    INSERT INTO lve_history (lve_id, date, event, source, detail) VALUES %s
+                    ON CONFLICT DO NOTHING
+                """, history_rows)
 
     conn.commit()
     if not cve_filter:

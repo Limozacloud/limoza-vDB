@@ -446,6 +446,17 @@ class RecordBatch:
         for h in (r.get("history") or []):
             self._history.append((lve_id, h["date"], h["event"], h["source"], h.get("detail")))
 
+    @staticmethod
+    def _dedup(rows, *key_idx):
+        """Keep first occurrence of each unique key — prevents ON CONFLICT DO UPDATE duplicates."""
+        seen, out = set(), []
+        for row in rows:
+            k = tuple(row[i] for i in key_idx)
+            if k not in seen:
+                seen.add(k)
+                out.append(row)
+        return out
+
     def flush(self, cur) -> None:
         """Bulk-write all accumulated rows to the real tables — one execute_values per table."""
         if self._lve_rows:
@@ -488,19 +499,19 @@ class RecordBatch:
                     ssvc_exploitation    = COALESCE(EXCLUDED.ssvc_exploitation,    lve_cve.ssvc_exploitation),
                     ssvc_automatable     = COALESCE(EXCLUDED.ssvc_automatable,     lve_cve.ssvc_automatable),
                     ssvc_technical_impact= COALESCE(EXCLUDED.ssvc_technical_impact,lve_cve.ssvc_technical_impact)
-            """, self._lve_cve)
+            """, self._dedup(self._lve_cve, 0))
 
         if self._titles:
             execute_values(cur, """
                 INSERT INTO lve_titles (lve_id, value, source, advisory_ref) VALUES %s
                 ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
-            """, self._titles)
+            """, self._dedup(self._titles, 0, 2, 3))
 
         if self._descriptions:
             execute_values(cur, """
                 INSERT INTO lve_descriptions (lve_id, value, source, advisory_ref) VALUES %s
                 ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
-            """, self._descriptions)
+            """, self._dedup(self._descriptions, 0, 2, 3))
 
         if self._cvss:
             execute_values(cur, """
@@ -509,20 +520,20 @@ class RecordBatch:
                     version = EXCLUDED.version, score = EXCLUDED.score,
                     severity = EXCLUDED.severity, advisory_ref = EXCLUDED.advisory_ref,
                     product_id = EXCLUDED.product_id
-            """, self._cvss)
+            """, self._dedup(self._cvss, 0, 3, 5))
 
         if self._cwes:
             execute_values(cur, """
                 INSERT INTO lve_cwes (lve_id, cwe_id, source, advisory_ref) VALUES %s
                 ON CONFLICT (lve_id, cwe_id, source) DO UPDATE SET advisory_ref = EXCLUDED.advisory_ref
-            """, self._cwes)
+            """, self._dedup(self._cwes, 0, 1, 2))
 
         if self._refs:
             execute_values(cur, """
                 INSERT INTO lve_references (lve_id, url, type, source, advisory_ref) VALUES %s
                 ON CONFLICT (lve_id, url, source) DO UPDATE SET
                     type = EXCLUDED.type, advisory_ref = EXCLUDED.advisory_ref
-            """, self._refs)
+            """, self._dedup(self._refs, 0, 1, 3))
 
         if self._advisories:
             execute_values(cur, """
@@ -530,7 +541,7 @@ class RecordBatch:
                 ON CONFLICT (lve_id, advisory_id) DO UPDATE SET
                     url = EXCLUDED.url, published = EXCLUDED.published,
                     updated = EXCLUDED.updated, vendor_data = EXCLUDED.vendor_data
-            """, self._advisories)
+            """, self._dedup(self._advisories, 0, 1))
 
         if self._upstream:
             execute_values(cur, """
@@ -539,7 +550,7 @@ class RecordBatch:
                     purl = EXCLUDED.purl, fix_version = EXCLUDED.fix_version,
                     fix_commit = EXCLUDED.fix_commit, ranges = EXCLUDED.ranges,
                     versions = EXCLUDED.versions, advisory_ref = EXCLUDED.advisory_ref
-            """, self._upstream)
+            """, self._dedup(self._upstream, 0, 1))
 
         if self._packages:
             execute_values(cur, """
@@ -558,7 +569,7 @@ class RecordBatch:
                     upstream_ref      = EXCLUDED.upstream_ref,
                     severity          = EXCLUDED.severity,
                     vendor_data       = EXCLUDED.vendor_data
-            """, self._packages)
+            """, self._dedup(self._packages, 0, 2, 8))
 
         if self._exploits:
             execute_values(cur, """
@@ -571,13 +582,13 @@ class RecordBatch:
                 INSERT INTO lve_mitigations (lve_id, value, source, advisory_ref, purls) VALUES %s
                 ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET
                     value = EXCLUDED.value, purls = EXCLUDED.purls
-            """, self._mitigations)
+            """, self._dedup(self._mitigations, 0, 2, 3))
 
         if self._impacts:
             execute_values(cur, """
                 INSERT INTO lve_impacts (lve_id, value, source, advisory_ref) VALUES %s
                 ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
-            """, self._impacts)
+            """, self._dedup(self._impacts, 0, 2, 3))
 
         if self._notices:
             execute_values(cur, """
