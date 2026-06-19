@@ -1,6 +1,16 @@
+import datetime
 from pathlib import Path
 from ingest.db import bulk_update_lve_cve
 from ingest.cisa_kev.transform import parse
+
+
+def _date(v):
+    if not v:
+        return None
+    try:
+        return datetime.date.fromisoformat(v)
+    except (ValueError, TypeError):
+        return None
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
@@ -23,8 +33,8 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
             known_ransomware = known_ransomware.strip().lower() == "known"
         rows.append({
             "cve_id":               cve_id,
-            "kev_date_added":       entry.get("date_added") or None,
-            "kev_due_date":         entry.get("due_date") or None,
+            "kev_date_added":       _date(entry.get("date_added")),
+            "kev_due_date":         _date(entry.get("due_date")),
             "kev_known_ransomware": known_ransomware,
             "kev_required_action":  entry.get("required_action") or None,
         })

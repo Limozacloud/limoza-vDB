@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_records
 from ingest.almalinux.transform import transform_advisories
 
 
@@ -17,34 +17,13 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         print("  AlmaLinux errata: no version files found")
         return
 
-    total = skipped = errors = i = 0
+    total = skipped = errors = 0
+    for vf in version_files:
+        major = vf.stem
+        data  = json.loads(vf.read_bytes())
+        print(f"  AlmaLinux {major}: {len(data)} advisories")
+        t, s, e = ingest_records(conn, transform_advisories(data, major),
+            label=f"AlmaLinux {major}", cve_filter=cve_filter)
+        total += t; skipped += s; errors += e
 
-    with conn.cursor() as cur:
-        for vf in version_files:
-            major = vf.stem  # "8", "9", "10"
-            data  = json.loads(vf.read_bytes())
-            print(f"  AlmaLinux: {len(data)} advisories in {major}")
-
-            for record in transform_advisories(data, major):
-                cve_id = record["cve"]["cve_id"]
-                if cve_filter and cve_id != cve_filter.upper():
-                    skipped += 1
-                    continue
-                try:
-                    cur.execute("SAVEPOINT sp")
-                    upsert_lve_record(cur, record)
-                    total += 1
-                    cur.execute("RELEASE SAVEPOINT sp")
-                except Exception as e:
-                    cur.execute("ROLLBACK TO SAVEPOINT sp")
-                    errors += 1
-                    if errors <= 5:
-                        print(f"  Error {cve_id}: {e}")
-
-                i += 1
-                if not cve_filter and i % 10000 == 0:
-                    conn.commit()
-                    print(f"  {i} records...")
-
-    conn.commit()
-    print(f"  AlmaLinux: {total} upserted · {skipped} skipped · {errors} errors")
+    print(f"  AlmaLinux: {total:,} upserted · {skipped} skipped · {errors} errors")

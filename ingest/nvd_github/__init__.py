@@ -47,13 +47,16 @@ def _write_snapshot(path: Path, state: dict) -> None:
             w.writerow([cve, sha])
 
 
+_PROGRESS_EVERY = 5_000
+
+
 def _import_chunk(args):
     """Worker process: import one chunk of CVEs.
 
     Returns (done_dict, total, errors, missing).
     Imports inside the function to work correctly under both fork and spawn.
     """
-    chunk, base_str, dsn, current_hashes = args
+    chunk, base_str, dsn, current_hashes, worker_id = args
 
     import psycopg2
     from ingest.db import upsert_lve_record
@@ -82,6 +85,9 @@ def _import_chunk(args):
 
             if (i + 1) % COMMIT_EVERY == 0:
                 conn.commit()
+
+            if (i + 1) % _PROGRESS_EVERY == 0:
+                print(f"  [w{worker_id}] {i+1:,}/{len(chunk):,}", flush=True)
 
     conn.commit()
     conn.close()
@@ -140,18 +146,17 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
 
     print(f"  NVD-GitHub: {n_workers} workers · ~{chunk_size:,} CVEs each · commit every {COMMIT_EVERY:,}")
 
-    worker_args = [(chunk, str(base), dsn, current) for chunk in chunks]
-
-    with mp.Pool(n_workers) as pool:
-        results = pool.map(_import_chunk, worker_args)
+    worker_args = [(chunk, str(base), dsn, current, i) for i, chunk in enumerate(chunks)]
 
     total = errors = missing = 0
     done  = {}
-    for worker_done, worker_total, worker_errors, worker_missing in results:
-        total   += worker_total
-        errors  += worker_errors
-        missing += worker_missing
-        done.update(worker_done)
+    with mp.Pool(n_workers) as pool:
+        for worker_done, worker_total, worker_errors, worker_missing in pool.imap_unordered(_import_chunk, worker_args):
+            total   += worker_total
+            errors  += worker_errors
+            missing += worker_missing
+            done.update(worker_done)
+            print(f"  NVD-GitHub: worker done · {total:,}/{len(targets):,} CVEs so far", flush=True)
 
     msg = f"  NVD-GitHub: {total:,} CVEs ingested · {errors} errors"
     if missing:
