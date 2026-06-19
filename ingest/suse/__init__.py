@@ -132,10 +132,16 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
                 """, upd_rows)
 
             if title_rows:
+                seen, title_rows_deduped = set(), []
+                for row in title_rows:
+                    k = (row[0], row[2], row[3])
+                    if k not in seen:
+                        seen.add(k)
+                        title_rows_deduped.append(row)
                 execute_values(cur, """
                     INSERT INTO lve_titles (lve_id, value, source, advisory_ref) VALUES %s
                     ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
-                """, title_rows)
+                """, title_rows_deduped)
 
             if history_rows:
                 execute_values(cur, """
