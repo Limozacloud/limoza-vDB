@@ -56,6 +56,40 @@ bulk_upsert_cve_fix       = _not_implemented
 bulk_upsert_cve_affected  = _not_implemented
 
 
+_BULK_UPDATE_CVE_FIELDS = frozenset({
+    "epss_score", "epss_percentile", "epss_date",
+    "kev_date_added", "kev_due_date", "kev_known_ransomware", "kev_required_action",
+    "ssvc_exploitation", "ssvc_automatable", "ssvc_technical_impact",
+    "status", "published", "updated",
+})
+
+def bulk_update_lve_cve(conn, rows: list[dict], fields: list[str], page_size: int = 5_000) -> int:
+    """Bulk-update specific lve_cve columns for existing CVEs via a single UPDATE FROM VALUES.
+
+    Only touches CVEs already present in lve_cve — no new rows are created.
+    Each dict in rows must contain 'cve_id' plus every field in `fields`.
+    Returns the approximate number of rows matched.
+    """
+    if not rows or not fields:
+        return 0
+    unknown = set(fields) - _BULK_UPDATE_CVE_FIELDS
+    if unknown:
+        raise ValueError(f"bulk_update_lve_cve: unknown fields {sorted(unknown)}")
+
+    set_clause = ", ".join(f"{f} = v.{f}" for f in fields)
+    col_list   = ", ".join(["cve_id"] + list(fields))
+    sql = f"""
+        UPDATE lve_cve SET {set_clause}
+        FROM (VALUES %s) AS v({col_list})
+        WHERE lve_cve.cve_id = v.cve_id
+    """
+    tuples = [tuple(row[k] for k in ["cve_id"] + list(fields)) for row in rows]
+    with conn.cursor() as cur:
+        execute_values(cur, sql, tuples, page_size=page_size)
+    conn.commit()
+    return len(rows)
+
+
 def _advisory_ref(a):
     if a is None:
         return None

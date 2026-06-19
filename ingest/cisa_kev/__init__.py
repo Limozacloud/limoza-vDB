@@ -1,6 +1,6 @@
 from pathlib import Path
-from ingest.db import upsert_lve_record
-from ingest.cisa_kev.transform import parse, transform
+from ingest.db import bulk_update_lve_cve
+from ingest.cisa_kev.transform import parse
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
@@ -16,10 +16,18 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     else:
         print(f"  CISA KEV: {len(data)} entries")
 
-    records = transform(data)
-    with conn.cursor() as cur:
-        for record in records:
-            upsert_lve_record(cur, record)
+    rows = []
+    for cve_id, entry in data.items():
+        known_ransomware = entry.get("known_ransomware")
+        if isinstance(known_ransomware, str):
+            known_ransomware = known_ransomware.strip().lower() == "known"
+        rows.append({
+            "cve_id":               cve_id,
+            "kev_date_added":       entry.get("date_added") or None,
+            "kev_due_date":         entry.get("due_date") or None,
+            "kev_known_ransomware": known_ransomware,
+            "kev_required_action":  entry.get("required_action") or None,
+        })
 
-    conn.commit()
-    print(f"  CISA KEV: {len(records)} entries ingested")
+    count = bulk_update_lve_cve(conn, rows, ["kev_date_added", "kev_due_date", "kev_known_ransomware", "kev_required_action"])
+    print(f"  CISA KEV: {count} entries updated")

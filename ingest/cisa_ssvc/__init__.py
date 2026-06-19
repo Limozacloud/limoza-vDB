@@ -1,6 +1,6 @@
 from pathlib import Path
-from ingest.db import upsert_lve_record
-from ingest.cisa_ssvc.transform import parse, transform
+from ingest.db import bulk_update_lve_cve
+from ingest.cisa_ssvc.transform import parse, _EXPLOITATION_MAP, _AUTOMATABLE_MAP, _IMPACT_MAP, _norm
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
@@ -16,10 +16,17 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     else:
         print(f"  CISA SSVC: {len(data)} CVEs")
 
-    records = transform(data)
-    with conn.cursor() as cur:
-        for record in records:
-            upsert_lve_record(cur, record)
+    rows = []
+    for cve_id, entry in data.items():
+        exploitation = _norm(entry.get("ssvc_exploitation", ""), _EXPLOITATION_MAP)
+        if not exploitation:
+            continue
+        rows.append({
+            "cve_id":                cve_id,
+            "ssvc_exploitation":     exploitation,
+            "ssvc_automatable":      _norm(entry.get("ssvc_automatable", ""), _AUTOMATABLE_MAP),
+            "ssvc_technical_impact": _norm(entry.get("ssvc_technical_impact", ""), _IMPACT_MAP),
+        })
 
-    conn.commit()
-    print(f"  CISA SSVC: {len(records)} entries ingested")
+    count = bulk_update_lve_cve(conn, rows, ["ssvc_exploitation", "ssvc_automatable", "ssvc_technical_impact"])
+    print(f"  CISA SSVC: {count} entries updated")

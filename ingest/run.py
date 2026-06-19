@@ -561,6 +561,22 @@ def main():
         conn.commit()
         conn.close()
         print(f"Truncated {len(tables)} table(s).")
+
+        # Reset incremental-import manifests so the next run is a full import.
+        # Only when truncating all tables — partial truncates keep the manifests.
+        if not [a for a in args[1:] if not a.startswith("--")]:
+            manifests = [
+                Path(DIRS["nvd_github"]) / "_state.imported.csv",
+                Path(DIRS["redhat"])     / ".import_state.json",
+                Path(DIRS["suse_vex"])   / ".import_state.json",
+            ]
+            removed = []
+            for m in manifests:
+                if m.exists():
+                    m.unlink()
+                    removed.append(m.name)
+            if removed:
+                print(f"Reset import manifests: {', '.join(removed)}")
         return
 
 
