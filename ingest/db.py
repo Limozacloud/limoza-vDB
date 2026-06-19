@@ -107,6 +107,7 @@ def ingest_records(
     Returns (total_upserted, total_skipped, total_errors).
     """
     total = skipped = errors = processed = 0
+    batch = RecordBatch()
     with conn.cursor() as cur:
         for rec in records:
             if cve_filter:
@@ -115,7 +116,7 @@ def ingest_records(
                     continue
             try:
                 cur.execute("SAVEPOINT sp")
-                upsert_lve_record(cur, rec)
+                batch.add(cur, rec)
                 total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
             except Exception as e:
@@ -125,46 +126,60 @@ def ingest_records(
                     print(f"  Error: {e}", flush=True)
             processed += 1
             if not cve_filter and processed % commit_every == 0:
+                batch.flush(cur)
                 conn.commit()
                 print(f"  {label}: {processed:,}", flush=True)
+        batch.flush(cur)
     conn.commit()
     return total, skipped, errors
 
 
 def _ingest_files_worker(args):
-    """Multiprocessing worker for ingest_files() — must stay module-level to be picklable."""
+    """Multiprocessing worker — uses RecordBatch to bulk-flush child table inserts."""
     chunk_str, transform_fn, dsn, label, commit_every, worker_id = args
     import psycopg2 as _pg
-    from ingest.db import upsert_lve_record as _upsert
+    from ingest.db import RecordBatch as _Batch
 
     chunk = [Path(p) for p in chunk_str]
     conn  = _pg.connect(dsn)
     total = skipped = errors = 0
-    n = len(chunk)
+    n     = len(chunk)
+    batch = _Batch()
 
     with conn.cursor() as cur:
         for i, f in enumerate(chunk):
             try:
-                cur.execute("SAVEPOINT sp")
                 records = transform_fn(f)
                 if not records:
                     skipped += 1
-                    cur.execute("RELEASE SAVEPOINT sp")
                     continue
                 if isinstance(records, dict):
                     records = [records]
                 for rec in records:
-                    _upsert(cur, rec)
+                    batch.add(cur, rec)
                     total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
             except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
                 errors += 1
                 if errors <= 3:
                     print(f"  [w{worker_id}] Error {f.name}: {e}", flush=True)
+
             if (i + 1) % commit_every == 0:
-                conn.commit()
+                try:
+                    batch.flush(cur)
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    errors += 1
+                    print(f"  [w{worker_id}] Flush error at {i+1:,}: {e}", flush=True)
+                    batch._clear()
                 print(f"  [w{worker_id}] {i+1:,}/{n:,}", flush=True)
+
+        try:
+            batch.flush(cur)
+        except Exception as e:
+            conn.rollback()
+            errors += 1
+            print(f"  [w{worker_id}] Final flush error: {e}", flush=True)
 
     conn.commit()
     conn.close()
@@ -215,9 +230,10 @@ def ingest_files(
                 print(f"  {label}: worker done · {total:,}/{len(files):,} records", flush=True)
         return total, skipped, errors
 
-    # Single-process
+    # Single-process — RecordBatch batches child-table inserts; SAVEPOINT isolates lve lookup errors
     total = skipped = errors = 0
     n = len(files)
+    batch = RecordBatch()
     with conn.cursor() as cur:
         for i, f in enumerate(files):
             f = Path(f)
@@ -236,7 +252,7 @@ def ingest_files(
                 for rec in records:
                     if cve_filter and cve_filter not in (rec.get("aliases") or []):
                         continue
-                    upsert_lve_record(cur, rec)
+                    batch.add(cur, rec)
                     inserted += 1
                 total += inserted
                 cur.execute("RELEASE SAVEPOINT sp")
@@ -248,8 +264,10 @@ def ingest_files(
                 if errors <= 5:
                     print(f"  Error {f.name}: {e}", flush=True)
             if not cve_filter and n > commit_every and (i + 1) % commit_every == 0:
+                batch.flush(cur)
                 conn.commit()
                 print(f"  {label}: {i+1:,}/{n:,}", flush=True)
+        batch.flush(cur)
     conn.commit()
     if state and not cve_filter:
         state.commit()
@@ -298,6 +316,286 @@ def _get_or_create_lve(cur, aliases: list) -> tuple:
     for alias in aliases:
         _lve_id_cache[alias] = lve_id
     return lve_id, True
+
+
+class RecordBatch:
+    """Accumulates lve records in memory for a single bulk flush — avoids per-CVE DB round-trips.
+
+    Usage:
+        batch = RecordBatch()
+        with conn.cursor() as cur:
+            for r in records:
+                batch.add(cur, r)           # resolves lve_id via cache, no child-table writes
+                if len(batch) >= 5_000:
+                    batch.flush(cur)
+                    conn.commit()
+            batch.flush(cur)
+        conn.commit()
+    """
+
+    __slots__ = (
+        "_lve_rows", "_lve_cve", "_titles", "_descriptions", "_cvss",
+        "_cwes", "_refs", "_advisories", "_upstream", "_packages",
+        "_exploits", "_mitigations", "_impacts", "_notices", "_history",
+    )
+
+    def __init__(self):
+        for s in self.__slots__:
+            object.__setattr__(self, s, [])
+
+    def __len__(self):
+        return len(self._lve_cve) + len(self._packages)
+
+    def add(self, cur, r: dict) -> None:
+        """Resolve lve_id and accumulate all child rows — no DB writes except lve lookup."""
+        aliases = sorted(set(a.upper() for a in (r.get("aliases") or []) if a))
+        lve_id, is_new = _get_or_create_lve(cur, aliases)
+
+        self._lve_rows.append((aliases, r.get("has_exploit", False), lve_id, is_new))
+
+        cve = r.get("cve") or {}
+        if cve:
+            epss = cve.get("epss") or {}
+            kev  = cve.get("kev")  or {}
+            ssvc = cve.get("ssvc") or {}
+            self._lve_cve.append((
+                lve_id, cve.get("cve_id"), cve.get("status"),
+                cve.get("published"), cve.get("updated"),
+                epss.get("score"), epss.get("percentile"), epss.get("date"),
+                kev.get("date_added"), kev.get("due_date"),
+                kev.get("known_ransomware"), kev.get("required_action"),
+                ssvc.get("exploitation"), ssvc.get("automatable"), ssvc.get("technical_impact"),
+            ))
+
+        def _dedup(items, *keys):
+            seen, out = set(), []
+            for item in (items or []):
+                k = tuple(item.get(f) for f in keys)
+                if k not in seen:
+                    seen.add(k)
+                    out.append(item)
+            return out
+
+        for t in _dedup(r.get("titles"), "source", "advisory"):
+            self._titles.append((lve_id, t["value"], t["source"], _advisory_ref(t.get("advisory"))))
+
+        for d in _dedup(r.get("descriptions"), "source", "advisory"):
+            self._descriptions.append((lve_id, d["value"], d["source"], _advisory_ref(d.get("advisory"))))
+
+        for c in _dedup(r.get("cvss"), "vector", "source"):
+            self._cvss.append((
+                lve_id, c["version"], c["score"], c["vector"],
+                c.get("severity") or cvss_severity(c.get("score")),
+                c["source"], _advisory_ref(c.get("advisory")), c.get("product_id"),
+            ))
+
+        for c in _dedup(r.get("cwes"), "id", "source"):
+            self._cwes.append((lve_id, c["id"], c["source"], _advisory_ref(c.get("advisory"))))
+
+        for ref in _dedup(r.get("references"), "url"):
+            self._refs.append((
+                lve_id, ref["url"], ref["type"], ref.get("source"),
+                _advisory_ref(ref.get("advisory")),
+            ))
+
+        for a in _dedup(r.get("advisories"), "@id"):
+            self._advisories.append((
+                lve_id, a["@id"], a["source"], a.get("url"),
+                a.get("published"), a.get("updated"),
+                json.dumps(a["vendor_data"]) if a.get("vendor_data") else None,
+            ))
+
+        for u in _dedup(r.get("upstream"), "@id"):
+            self._upstream.append((
+                lve_id, u["@id"], u["purl"], u.get("fix_version"), u.get("fix_commit"),
+                json.dumps(u["ranges"]) if u.get("ranges") else None,
+                u.get("versions") or None, u["source"], _advisory_ref(u.get("advisory")),
+            ))
+
+        for p in _dedup(r.get("packages"), "purl", "source"):
+            self._packages.append((
+                lve_id, p.get("name"), p["purl"],
+                p.get("affected_state", "unknown"), p.get("remediation_state", "unknown"),
+                p.get("status_raw"), p.get("vex_justification"),
+                json.dumps(p["ranges"]) if p.get("ranges") else None,
+                p["source"], _advisory_ref(p.get("advisory")), _advisory_ref(p.get("upstream")),
+                p.get("severity"),
+                json.dumps(p["vendor_data"]) if p.get("vendor_data") else None,
+            ))
+
+        for e in _dedup(r.get("exploits"), "url"):
+            self._exploits.append((
+                lve_id, e["source"], e.get("source_id"), e.get("name"), e["url"],
+                json.dumps(e["metadata"]) if e.get("metadata") else None,
+            ))
+
+        for m in _dedup(r.get("mitigations"), "source", "advisory"):
+            self._mitigations.append((
+                lve_id, m["value"], m["source"], _advisory_ref(m.get("advisory")), m.get("purls"),
+            ))
+
+        for i in _dedup(r.get("impacts"), "source", "advisory"):
+            self._impacts.append((lve_id, i["value"], i["source"], _advisory_ref(i.get("advisory"))))
+
+        for n in (r.get("notices") or []):
+            self._notices.append((
+                n["type"], n["source"], n["message"],
+                json.dumps(n["metadata"]) if n.get("metadata") else None,
+            ))
+
+        for h in (r.get("history") or []):
+            self._history.append((lve_id, h["date"], h["event"], h["source"], h.get("detail")))
+
+    def flush(self, cur) -> None:
+        """Bulk-write all accumulated rows to the real tables — one execute_values per table."""
+        if self._lve_rows:
+            new_rows = [(a, he, lid) for a, he, lid, is_new in self._lve_rows if is_new]
+            upd_rows = [(a, he, lid) for a, he, lid, is_new in self._lve_rows if not is_new]
+            if new_rows:
+                execute_values(cur, """
+                    UPDATE lve SET has_exploit = v.has_exploit
+                    FROM (VALUES %s) AS v(aliases, has_exploit, lve_id)
+                    WHERE lve.lve_id = v.lve_id
+                """, new_rows)
+            if upd_rows:
+                execute_values(cur, """
+                    UPDATE lve SET
+                        aliases     = COALESCE((SELECT array_agg(DISTINCT x) FROM unnest(lve.aliases || v.new_aliases::text[]) x), '{}'),
+                        has_exploit = lve.has_exploit OR v.has_exploit,
+                        ingested_at = now()
+                    FROM (VALUES %s) AS v(new_aliases, has_exploit, lve_id)
+                    WHERE lve.lve_id = v.lve_id
+                """, upd_rows)
+
+        if self._lve_cve:
+            execute_values(cur, """
+                INSERT INTO lve_cve (lve_id, cve_id, status, published, updated,
+                    epss_score, epss_percentile, epss_date,
+                    kev_date_added, kev_due_date, kev_known_ransomware, kev_required_action,
+                    ssvc_exploitation, ssvc_automatable, ssvc_technical_impact)
+                VALUES %s
+                ON CONFLICT (lve_id) DO UPDATE SET
+                    status    = COALESCE(EXCLUDED.status,    lve_cve.status),
+                    published = COALESCE(EXCLUDED.published, lve_cve.published),
+                    updated   = COALESCE(EXCLUDED.updated,   lve_cve.updated),
+                    epss_score           = COALESCE(EXCLUDED.epss_score,           lve_cve.epss_score),
+                    epss_percentile      = COALESCE(EXCLUDED.epss_percentile,      lve_cve.epss_percentile),
+                    epss_date            = COALESCE(EXCLUDED.epss_date,            lve_cve.epss_date),
+                    kev_date_added       = COALESCE(EXCLUDED.kev_date_added,       lve_cve.kev_date_added),
+                    kev_due_date         = COALESCE(EXCLUDED.kev_due_date,         lve_cve.kev_due_date),
+                    kev_known_ransomware = COALESCE(EXCLUDED.kev_known_ransomware, lve_cve.kev_known_ransomware),
+                    kev_required_action  = COALESCE(EXCLUDED.kev_required_action,  lve_cve.kev_required_action),
+                    ssvc_exploitation    = COALESCE(EXCLUDED.ssvc_exploitation,    lve_cve.ssvc_exploitation),
+                    ssvc_automatable     = COALESCE(EXCLUDED.ssvc_automatable,     lve_cve.ssvc_automatable),
+                    ssvc_technical_impact= COALESCE(EXCLUDED.ssvc_technical_impact,lve_cve.ssvc_technical_impact)
+            """, self._lve_cve)
+
+        if self._titles:
+            execute_values(cur, """
+                INSERT INTO lve_titles (lve_id, value, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
+            """, self._titles)
+
+        if self._descriptions:
+            execute_values(cur, """
+                INSERT INTO lve_descriptions (lve_id, value, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
+            """, self._descriptions)
+
+        if self._cvss:
+            execute_values(cur, """
+                INSERT INTO lve_cvss (lve_id, version, score, vector, severity, source, advisory_ref, product_id) VALUES %s
+                ON CONFLICT (lve_id, vector, source) DO UPDATE SET
+                    version = EXCLUDED.version, score = EXCLUDED.score,
+                    severity = EXCLUDED.severity, advisory_ref = EXCLUDED.advisory_ref,
+                    product_id = EXCLUDED.product_id
+            """, self._cvss)
+
+        if self._cwes:
+            execute_values(cur, """
+                INSERT INTO lve_cwes (lve_id, cwe_id, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, cwe_id, source) DO UPDATE SET advisory_ref = EXCLUDED.advisory_ref
+            """, self._cwes)
+
+        if self._refs:
+            execute_values(cur, """
+                INSERT INTO lve_references (lve_id, url, type, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, url, source) DO UPDATE SET
+                    type = EXCLUDED.type, advisory_ref = EXCLUDED.advisory_ref
+            """, self._refs)
+
+        if self._advisories:
+            execute_values(cur, """
+                INSERT INTO lve_advisories (lve_id, advisory_id, source, url, published, updated, vendor_data) VALUES %s
+                ON CONFLICT (lve_id, advisory_id) DO UPDATE SET
+                    url = EXCLUDED.url, published = EXCLUDED.published,
+                    updated = EXCLUDED.updated, vendor_data = EXCLUDED.vendor_data
+            """, self._advisories)
+
+        if self._upstream:
+            execute_values(cur, """
+                INSERT INTO lve_upstream (lve_id, upstream_id, purl, fix_version, fix_commit, ranges, versions, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, upstream_id) DO UPDATE SET
+                    purl = EXCLUDED.purl, fix_version = EXCLUDED.fix_version,
+                    fix_commit = EXCLUDED.fix_commit, ranges = EXCLUDED.ranges,
+                    versions = EXCLUDED.versions, advisory_ref = EXCLUDED.advisory_ref
+            """, self._upstream)
+
+        if self._packages:
+            execute_values(cur, """
+                INSERT INTO lve_packages
+                    (lve_id, name, purl, affected_state, remediation_state, status_raw,
+                     vex_justification, ranges, source, advisory_ref, upstream_ref, severity, vendor_data)
+                VALUES %s
+                ON CONFLICT (lve_id, purl, source) DO UPDATE SET
+                    name              = EXCLUDED.name,
+                    affected_state    = EXCLUDED.affected_state,
+                    remediation_state = EXCLUDED.remediation_state,
+                    status_raw        = EXCLUDED.status_raw,
+                    vex_justification = EXCLUDED.vex_justification,
+                    ranges            = EXCLUDED.ranges,
+                    advisory_ref      = EXCLUDED.advisory_ref,
+                    upstream_ref      = EXCLUDED.upstream_ref,
+                    severity          = EXCLUDED.severity,
+                    vendor_data       = EXCLUDED.vendor_data
+            """, self._packages)
+
+        if self._exploits:
+            execute_values(cur, """
+                INSERT INTO lve_exploits (lve_id, source, source_id, name, url, metadata) VALUES %s
+                ON CONFLICT (lve_id, url) DO NOTHING
+            """, self._exploits)
+
+        if self._mitigations:
+            execute_values(cur, """
+                INSERT INTO lve_mitigations (lve_id, value, source, advisory_ref, purls) VALUES %s
+                ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET
+                    value = EXCLUDED.value, purls = EXCLUDED.purls
+            """, self._mitigations)
+
+        if self._impacts:
+            execute_values(cur, """
+                INSERT INTO lve_impacts (lve_id, value, source, advisory_ref) VALUES %s
+                ON CONFLICT (lve_id, source, advisory_ref) DO UPDATE SET value = EXCLUDED.value
+            """, self._impacts)
+
+        if self._notices:
+            execute_values(cur, """
+                INSERT INTO notices (type, source, message, metadata) VALUES %s
+                ON CONFLICT (type, source, message) DO NOTHING
+            """, self._notices)
+
+        if self._history:
+            execute_values(cur, """
+                INSERT INTO lve_history (lve_id, date, event, source, detail) VALUES %s
+                ON CONFLICT DO NOTHING
+            """, self._history)
+
+        self._clear()
+
+    def _clear(self):
+        for s in self.__slots__:
+            object.__getattribute__(self, s).clear()
 
 
 def upsert_lve_record(cur, r: dict) -> None:
