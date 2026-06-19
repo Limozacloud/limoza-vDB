@@ -1,5 +1,6 @@
 import datetime
 import json
+import multiprocessing as mp
 import os
 import subprocess
 from pathlib import Path
@@ -90,6 +91,171 @@ def bulk_update_lve_cve(conn, rows: list[dict], fields: list[str], page_size: in
     return len(rows)
 
 
+INGEST_COMMIT_EVERY = 5_000
+
+
+def ingest_records(
+    conn,
+    records,
+    *,
+    label: str,
+    commit_every: int = INGEST_COMMIT_EVERY,
+    cve_filter: str = None,
+) -> tuple:
+    """Import an in-memory iterator of record dicts.
+
+    Returns (total_upserted, total_skipped, total_errors).
+    """
+    total = skipped = errors = processed = 0
+    with conn.cursor() as cur:
+        for rec in records:
+            if cve_filter:
+                if cve_filter not in (rec.get("aliases") or []):
+                    skipped += 1
+                    continue
+            try:
+                cur.execute("SAVEPOINT sp")
+                upsert_lve_record(cur, rec)
+                total += 1
+                cur.execute("RELEASE SAVEPOINT sp")
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT sp")
+                errors += 1
+                if errors <= 5:
+                    print(f"  Error: {e}", flush=True)
+            processed += 1
+            if not cve_filter and processed % commit_every == 0:
+                conn.commit()
+                print(f"  {label}: {processed:,}", flush=True)
+    conn.commit()
+    return total, skipped, errors
+
+
+def _ingest_files_worker(args):
+    """Multiprocessing worker for ingest_files() — must stay module-level to be picklable."""
+    chunk_str, transform_fn, dsn, label, commit_every, worker_id = args
+    import psycopg2 as _pg
+    from ingest.db import upsert_lve_record as _upsert
+
+    chunk = [Path(p) for p in chunk_str]
+    conn  = _pg.connect(dsn)
+    total = skipped = errors = 0
+    n = len(chunk)
+
+    with conn.cursor() as cur:
+        for i, f in enumerate(chunk):
+            try:
+                cur.execute("SAVEPOINT sp")
+                records = transform_fn(f)
+                if not records:
+                    skipped += 1
+                    cur.execute("RELEASE SAVEPOINT sp")
+                    continue
+                if isinstance(records, dict):
+                    records = [records]
+                for rec in records:
+                    _upsert(cur, rec)
+                    total += 1
+                cur.execute("RELEASE SAVEPOINT sp")
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT sp")
+                errors += 1
+                if errors <= 3:
+                    print(f"  [w{worker_id}] Error {f.name}: {e}", flush=True)
+            if (i + 1) % commit_every == 0:
+                conn.commit()
+                print(f"  [w{worker_id}] {i+1:,}/{n:,}", flush=True)
+
+    conn.commit()
+    conn.close()
+    return total, skipped, errors
+
+
+def ingest_files(
+    conn,
+    files: list,
+    transform_fn,
+    *,
+    label: str,
+    commit_every: int = INGEST_COMMIT_EVERY,
+    state=None,
+    cve_filter: str = None,
+    n_workers: int = 1,
+) -> tuple:
+    """Standard file-based import loop with SAVEPOINT, batching, and optional parallelism.
+
+    transform_fn(path: Path) → dict | list[dict] | None
+        Return None or [] to skip the file.
+
+    With n_workers > 1: transform_fn must be picklable (module-level function or
+    functools.partial of one). State tracking is disabled in parallel mode —
+    use for full imports where all files are already pre-selected.
+
+    Returns (total_records_upserted, files_skipped, files_errored).
+    """
+    if not files:
+        return 0, 0, 0
+
+    if n_workers > 1 and not cve_filter:
+        n          = min(n_workers, mp.cpu_count(), len(files))
+        chunk_size = (len(files) + n - 1) // n
+        chunks     = [files[i:i + chunk_size] for i in range(0, len(files), chunk_size)]
+        dsn        = os.environ["POSTGRES_DSN"]
+        worker_args = [
+            ([str(f) for f in chunk], transform_fn, dsn, label, commit_every, i)
+            for i, chunk in enumerate(chunks)
+        ]
+        print(f"  {label}: {n} workers · ~{chunk_size:,} files each")
+        total = skipped = errors = 0
+        with mp.Pool(n) as pool:
+            for w_total, w_skipped, w_errors in pool.imap_unordered(_ingest_files_worker, worker_args):
+                total   += w_total
+                skipped += w_skipped
+                errors  += w_errors
+                print(f"  {label}: worker done · {total:,}/{len(files):,} records", flush=True)
+        return total, skipped, errors
+
+    # Single-process
+    total = skipped = errors = 0
+    n = len(files)
+    with conn.cursor() as cur:
+        for i, f in enumerate(files):
+            f = Path(f)
+            try:
+                cur.execute("SAVEPOINT sp")
+                records = transform_fn(f)
+                if not records:
+                    skipped += 1
+                    cur.execute("RELEASE SAVEPOINT sp")
+                    if state:
+                        state.mark(f)
+                    continue
+                if isinstance(records, dict):
+                    records = [records]
+                inserted = 0
+                for rec in records:
+                    if cve_filter and cve_filter not in (rec.get("aliases") or []):
+                        continue
+                    upsert_lve_record(cur, rec)
+                    inserted += 1
+                total += inserted
+                cur.execute("RELEASE SAVEPOINT sp")
+                if state:
+                    state.mark(f)
+            except Exception as e:
+                cur.execute("ROLLBACK TO SAVEPOINT sp")
+                errors += 1
+                if errors <= 5:
+                    print(f"  Error {f.name}: {e}", flush=True)
+            if not cve_filter and n > commit_every and (i + 1) % commit_every == 0:
+                conn.commit()
+                print(f"  {label}: {i+1:,}/{n:,}", flush=True)
+    conn.commit()
+    if state and not cve_filter:
+        state.commit()
+    return total, skipped, errors
+
+
 def _advisory_ref(a):
     if a is None:
         return None
@@ -98,9 +264,22 @@ def _advisory_ref(a):
     return a.get("@id")
 
 
+_lve_id_cache: dict = {}
+
+
+def clear_lve_cache() -> None:
+    """Clear the in-process LVE ID cache (call between import runs if needed)."""
+    _lve_id_cache.clear()
+
+
 def _get_or_create_lve(cur, aliases: list) -> tuple:
     """Find existing LVE by alias overlap, or create a new one. Returns (lve_id, is_new).
-    Lookup uses only CVE-format aliases to avoid merging unrelated LVEs that share an ADV."""
+    Lookup uses only CVE-format aliases to avoid merging unrelated LVEs that share an ADV.
+    Results are cached in-process to avoid repeated DB round-trips for the same CVE."""
+    for alias in aliases:
+        if alias in _lve_id_cache:
+            return _lve_id_cache[alias], False
+
     lookup = [a for a in aliases if a.startswith("CVE-")] or aliases
     if lookup:
         cur.execute(
@@ -109,9 +288,16 @@ def _get_or_create_lve(cur, aliases: list) -> tuple:
         )
         row = cur.fetchone()
         if row:
-            return row[0], False
+            lve_id = row[0]
+            for alias in aliases:
+                _lve_id_cache[alias] = lve_id
+            return lve_id, False
+
     cur.execute("INSERT INTO lve (lve_id, aliases) VALUES (NULL, %s) RETURNING lve_id", (aliases,))
-    return cur.fetchone()[0], True
+    lve_id = cur.fetchone()[0]
+    for alias in aliases:
+        _lve_id_cache[alias] = lve_id
+    return lve_id, True
 
 
 def upsert_lve_record(cur, r: dict) -> None:

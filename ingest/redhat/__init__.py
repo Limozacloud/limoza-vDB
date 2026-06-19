@@ -2,13 +2,21 @@
 import json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_files
 from ingest.incremental import ImportState
 from ingest.redhat.transform import transform, transform_advisory
 
+N_WORKERS = 4
+
+
+def _transform_vex_file(f: Path):
+    """Module-level so it can be used with multiprocessing."""
+    data = json.loads(f.read_bytes())
+    return transform(data)
+
 
 def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None:
-    base = Path(dirs["redhat"])
+    base     = Path(dirs["redhat"])
     vex_base = base / "vex"
     adv_base = base / "advisories"
 
@@ -28,49 +36,19 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
     else:
         all_vex   = sorted(vex_base.rglob("cve-*.json"))
         vex_files = state.changed(all_vex, full=full)
-        print(f"  RedHat VEX: {len(vex_files)} changed of {len(all_vex)} CVE files")
+        print(f"  RedHat VEX: {len(vex_files):,} changed of {len(all_vex):,} CVE files")
 
-    total = skipped = errors = 0
-
-    with conn.cursor() as cur:
-        for i, f in enumerate(vex_files):
-            try:
-                cur.execute("SAVEPOINT sp")
-                data   = json.loads(f.read_bytes())
-                record = transform(data)
-
-                if record is None:
-                    skipped += 1
-                    cur.execute("RELEASE SAVEPOINT sp")
-                    state.mark(f)
-                    continue
-
-                upsert_lve_record(cur, record)
-                total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-                state.mark(f)
-            except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error {f.name}: {e}")
-
-            if not cve_filter and (i + 1) % 5000 == 0:
-                conn.commit()
-                print(f"  {i+1}/{len(vex_files)}")
-
-    conn.commit()
-    print(f"  RedHat VEX: {total} upserted · {skipped} skipped · {errors} errors")
+    total, skipped, errors = ingest_files(conn, vex_files, _transform_vex_file,
+        label="RedHat VEX", state=state, cve_filter=cve_filter,
+        n_workers=N_WORKERS if not cve_filter else 1)
+    print(f"  RedHat VEX: {total:,} upserted · {skipped} skipped · {errors} errors")
 
     # ── Advisory import ───────────────────────────────────────────────────────
     if not adv_base.exists():
         print(f"  RedHat advisories: {adv_base} not found — skipping")
-        if not cve_filter:
-            state.commit()
         return
 
     if cve_filter:
-        # resolve RHSA IDs already imported from VEX for this CVE
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT a.advisory_id FROM lve_advisories a
@@ -80,21 +58,18 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
             rhsa_ids = [row[0] for row in cur.fetchall()]
         adv_files = []
         for rhsa_id in rhsa_ids:
-            # RHSA-2022:5726 → advisories/2022/rhsa-2022_5726.json
-            fname = rhsa_id.lower().replace(":", "_")   # rhsa-2022_5726
-            year  = fname.split("-")[1].split("_")[0]   # 2022
+            fname = rhsa_id.lower().replace(":", "_")
+            year  = fname.split("-")[1].split("_")[0]
             p = adv_base / year / f"{fname}.json"
             if p.exists():
                 adv_files.append(p)
+        print(f"  RedHat advisories: {len(adv_files)} files")
     else:
         all_adv   = sorted(adv_base.rglob("rhsa-*.json"))
         adv_files = state.changed(all_adv, full=full)
-        print(f"  RedHat advisories: {len(adv_files)} changed of {len(all_adv)} files")
+        print(f"  RedHat advisories: {len(adv_files):,} changed of {len(all_adv):,} files")
 
-    if cve_filter:
-        print(f"  RedHat advisories: {len(adv_files)} files")
     adv_total = adv_errors = 0
-
     with conn.cursor() as cur:
         for i, f in enumerate(adv_files):
             try:
@@ -106,7 +81,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
                     cve_id  = rec["cve_id"]
                     rhsa_id = rec["rhsa_id"]
 
-                    # resolve lve_id from cve_id via aliases
                     cur.execute(
                         "SELECT lve_id FROM lve WHERE %s = ANY(aliases) LIMIT 1",
                         (cve_id,)
@@ -116,7 +90,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
                         continue
                     lve_id = row[0]
 
-                    # update advisory published/updated/vendor_data
                     vendor_data = {}
                     if rec.get("reboot_required"):
                         vendor_data["reboot_required"] = True
@@ -135,7 +108,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
                           json.dumps(vendor_data) if vendor_data else None,
                           lve_id, rhsa_id))
 
-                    # add advisory-level title
                     if rec["title"]:
                         cur.execute("""
                             INSERT INTO lve_titles (lve_id, value, source, advisory_ref)
@@ -144,7 +116,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
                                 value = EXCLUDED.value
                         """, (lve_id, rec["title"], rhsa_id))
 
-                    # add advisory revision history
                     for h in rec.get("history") or []:
                         cur.execute("""
                             INSERT INTO lve_history (lve_id, date, event, source, detail)
@@ -154,18 +125,19 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
 
                 adv_total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
-                state.mark(f)
+                if not cve_filter:
+                    state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 adv_errors += 1
                 if adv_errors <= 5:
                     print(f"  Error {f.name}: {e}")
 
-            if not cve_filter and (i + 1) % 2000 == 0:
+            if not cve_filter and (i + 1) % 2_000 == 0:
                 conn.commit()
-                print(f"  advisories {i+1}/{len(adv_files)}")
+                print(f"  RedHat advisories: {i+1:,}/{len(adv_files):,}")
 
     conn.commit()
     if not cve_filter:
         state.commit()
-    print(f"  RedHat advisories: {adv_total} processed · {adv_errors} errors")
+    print(f"  RedHat advisories: {adv_total:,} processed · {adv_errors} errors")

@@ -1,10 +1,13 @@
 """Ingest SUSE CVE data from local CSAF VEX and Advisory caches."""
+import functools
 import json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_files
 from ingest.incremental import ImportState
 from ingest.suse.transform import transform, transform_advisory
+
+N_WORKERS = 8
 
 
 def _adv_slug(adv_id: str) -> str:
@@ -19,6 +22,12 @@ def _load_adv_map(base: Path) -> dict:
         return adv_map
     print("  SUSE: no advisory map found (run `sync suse` to build it)")
     return {}
+
+
+def _transform_vex_file(f: Path, *, adv_map):
+    """Module-level so functools.partial of this is picklable for multiprocessing."""
+    data = json.loads(f.read_bytes())
+    return transform(data, adv_map)
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None:
@@ -39,46 +48,18 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
     else:
         all_files = sorted(base.rglob("cve-*.json"))
         files     = state.changed(all_files, full=full)
-        print(f"  SUSE VEX: {len(files)} changed of {len(all_files)} CVE files")
+        print(f"  SUSE VEX: {len(files):,} changed of {len(all_files):,} CVE files")
 
-    total = skipped = errors = 0
-
-    with conn.cursor() as cur:
-        for i, f in enumerate(files):
-            try:
-                cur.execute("SAVEPOINT sp")
-                data   = json.loads(f.read_bytes())
-                record = transform(data, adv_map)
-
-                if record is None:
-                    skipped += 1
-                    cur.execute("RELEASE SAVEPOINT sp")
-                    state.mark(f)
-                    continue
-
-                upsert_lve_record(cur, record)
-                total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-                state.mark(f)
-            except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error {f.name}: {e}")
-
-            if not cve_filter and (i + 1) % 5000 == 0:
-                conn.commit()
-                print(f"  {i+1}/{len(files)}")
-
-    conn.commit()
-    print(f"  SUSE VEX: {total} upserted · {skipped} skipped · {errors} errors")
+    fn = functools.partial(_transform_vex_file, adv_map=adv_map)
+    total, skipped, errors = ingest_files(conn, files, fn,
+        label="SUSE VEX", state=state, cve_filter=cve_filter,
+        n_workers=N_WORKERS if not cve_filter else 1)
+    print(f"  SUSE VEX: {total:,} upserted · {skipped} skipped · {errors} errors")
 
     # ── Advisory import ───────────────────────────────────────────────────────
     adv_base = base / "advisories"
     if not adv_base.exists():
-        print(f"  SUSE advisories: {adv_base} not found — skipping (run `sync suse` to populate)")
-        if not cve_filter:
-            state.commit()
+        print(f"  SUSE advisories: {adv_base} not found — skipping")
         return
 
     if cve_filter:
@@ -94,15 +75,13 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
             p = adv_base / f"{_adv_slug(adv_id)}.json"
             if p.exists():
                 adv_files.append(p)
+        print(f"  SUSE advisories: {len(adv_files)} files")
     else:
         all_adv   = sorted(adv_base.glob("*.json"))
         adv_files = state.changed(all_adv, full=full)
-        print(f"  SUSE advisories: {len(adv_files)} changed of {len(all_adv)} files")
+        print(f"  SUSE advisories: {len(adv_files):,} changed of {len(all_adv):,} files")
 
-    if cve_filter:
-        print(f"  SUSE advisories: {len(adv_files)} files")
     adv_total = adv_errors = 0
-
     with conn.cursor() as cur:
         for i, f in enumerate(adv_files):
             try:
@@ -147,18 +126,19 @@ def ingest(conn, dirs: dict, cve_filter: str = None, full: bool = False) -> None
 
                 adv_total += 1
                 cur.execute("RELEASE SAVEPOINT sp")
-                state.mark(f)
+                if not cve_filter:
+                    state.mark(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 adv_errors += 1
                 if adv_errors <= 5:
                     print(f"  Error {f.name}: {e}")
 
-            if not cve_filter and (i + 1) % 2000 == 0:
+            if not cve_filter and (i + 1) % 2_000 == 0:
                 conn.commit()
-                print(f"  advisories {i+1}/{len(adv_files)}")
+                print(f"  SUSE advisories: {i+1:,}/{len(adv_files):,}")
 
     conn.commit()
     if not cve_filter:
         state.commit()
-    print(f"  SUSE advisories: {adv_total} processed · {adv_errors} errors")
+    print(f"  SUSE advisories: {adv_total:,} processed · {adv_errors} errors")

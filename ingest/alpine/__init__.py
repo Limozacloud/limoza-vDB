@@ -2,8 +2,13 @@
 import json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_files
 from ingest.alpine.transform import transform_file
+
+
+def _transform(f: Path):
+    data = json.loads(f.read_bytes())
+    return list(transform_file(data))
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
@@ -15,34 +20,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     files = sorted(f for f in base.rglob("*.json") if f.name != "checkpoint.json")
     print(f"  Alpine secdb: {len(files)} files")
 
-    total = skipped = errors = 0
-
-    with conn.cursor() as cur:
-        for i, f in enumerate(files):
-            try:
-                data = json.loads(f.read_bytes())
-            except Exception as e:
-                print(f"  Alpine secdb: parse error {f}: {e}")
-                continue
-
-            for record in transform_file(data):
-                cve_id = record["cve"]["cve_id"]
-                if cve_filter and cve_id != cve_filter.upper():
-                    skipped += 1
-                    continue
-                try:
-                    cur.execute("SAVEPOINT sp")
-                    upsert_lve_record(cur, record)
-                    total += 1
-                    cur.execute("RELEASE SAVEPOINT sp")
-                except Exception as e:
-                    cur.execute("ROLLBACK TO SAVEPOINT sp")
-                    errors += 1
-                    if errors <= 5:
-                        print(f"  Error {cve_id}: {e}")
-
-            if not cve_filter and (i + 1) % 5 == 0:
-                conn.commit()
-
-    conn.commit()
-    print(f"  Alpine secdb: {total} upserted · {skipped} skipped · {errors} errors")
+    total, skipped, errors = ingest_files(conn, files, _transform,
+        label="Alpine secdb", cve_filter=cve_filter)
+    print(f"  Alpine secdb: {total:,} upserted · {skipped} skipped · {errors} errors")

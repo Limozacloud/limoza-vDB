@@ -1,7 +1,14 @@
 from pathlib import Path
-from ingest.db import upsert_lve_record
+
+from ingest.db import ingest_files
 from ingest.microsoft.transform import parse, transform
 from ingest.cpe import validate as _cpe_validate
+
+N_WORKERS = 4
+
+
+def _transform_file(f: Path):
+    return transform(parse(f.read_bytes()))
 
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
@@ -14,19 +21,6 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     files = sorted(base.glob("*.json"))
     print(f"  Microsoft: {len(files)} CVRF files" + (f" (filter: {cve_filter})" if cve_filter else ""))
 
-    total = 0
-    for f in files:
-        try:
-            records = transform(parse(f.read_bytes()))
-            if cve_filter:
-                records = [r for r in records if cve_filter in (r.get("aliases") or [])]
-            with conn.cursor() as cur:
-                for record in records:
-                    upsert_lve_record(cur, record)
-            conn.commit()
-            total += len(records)
-        except Exception as e:
-            conn.rollback()
-            print(f"  Error {f.name}: {e}")
-
-    print(f"  Microsoft: {total} LVE records upserted")
+    total, skipped, errors = ingest_files(conn, files, _transform_file,
+        label="Microsoft", cve_filter=cve_filter, n_workers=N_WORKERS)
+    print(f"  Microsoft: {total:,} records upserted · {errors} errors")

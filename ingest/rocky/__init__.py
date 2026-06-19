@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_records
 from ingest.rocky.transform import parse_updateinfo, transform_advisories
 
 
@@ -23,37 +23,16 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
 
     print(f"  Rocky errata: {len(xml_files)} updateinfo files, {len(adv_files)} Apollo advisories")
 
-    total = skipped = errors = i = 0
+    total = skipped = errors = 0
 
-    def _upsert(record: dict) -> None:
-        nonlocal total, skipped, errors, i
-        cve_id = record["cve"]["cve_id"]
-        if cve_filter and cve_id != cve_filter.upper():
-            skipped += 1
-            return
-        with conn.cursor() as cur:
-            try:
-                cur.execute("SAVEPOINT sp")
-                upsert_lve_record(cur, record)
-                total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-            except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error {cve_id}: {e}")
-        i += 1
-        if not cve_filter and i % 10000 == 0:
-            conn.commit()
-            print(f"  {i} records...")
+    def _xml_records():
+        for xml_path in xml_files:
+            major = xml_path.parent.name
+            yield from parse_updateinfo(xml_path, major)
 
-    # updateinfo.xml (bulk history)
-    for xml_path in xml_files:
-        major = xml_path.parent.name
-        for record in parse_updateinfo(xml_path, major):
-            _upsert(record)
+    t, s, e = ingest_records(conn, _xml_records(), label="Rocky XML", cve_filter=cve_filter)
+    total += t; skipped += s; errors += e
 
-    # Apollo API advisories (recent tail)
     if adv_files:
         advisories = []
         for f in adv_files:
@@ -61,8 +40,8 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
                 advisories.append(json.loads(f.read_bytes()))
             except Exception:
                 pass
-        for record in transform_advisories(advisories):
-            _upsert(record)
+        t, s, e = ingest_records(conn, transform_advisories(advisories),
+            label="Rocky advisories", cve_filter=cve_filter)
+        total += t; skipped += s; errors += e
 
-    conn.commit()
-    print(f"  Rocky: {total} upserted · {skipped} skipped · {errors} errors")
+    print(f"  Rocky: {total:,} upserted · {skipped} skipped · {errors} errors")
