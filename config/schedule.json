@@ -2,7 +2,7 @@
   "jobs": [
     {
       "name": "daily",
-      "sync":   ["nvd-github", "redhat", "suse_vex", "ubuntu", "debian", "alpine",
+      "sync":   ["nvd-github", "redhat", "suse", "ubuntu", "debian", "alpine",
                  "almalinux", "rocky", "oracle", "microsoft",
                  "epss", "cisa_kev", "cisa_ssvc", "bsi", "nuclei",
                  "exploitdb", "metasploit", "poc_github", "ghsa", "osv"],
