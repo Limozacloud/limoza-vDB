@@ -1,5 +1,6 @@
 services:
   postgres:
+    container_name: limoza-vdb-postgres
     image: postgres:16-alpine
     env_file: .env
     # No ports exposed — only reachable from within the Docker network.
@@ -8,6 +9,7 @@ services:
     restart: unless-stopped
 
   ingest:
+    container_name: limoza-vdb-ingest
     # Uses the image published to GHCR by the release workflow. Requires a published
     # release (the image must exist) and the GHCR package set to public — or a
     # `docker login ghcr.io`. Pin to a version tag (e.g. :0.1.1) for reproducible deploys.
@@ -74,6 +76,7 @@ services:
     restart: unless-stopped
 
   hasura:
+    container_name: limoza-vdb-hasura
     image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
     env_file: .env
     ports:
