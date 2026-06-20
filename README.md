@@ -74,14 +74,14 @@ echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 docker compose up -d postgres hasura ingest
 
 # 3. Apply the database schema
-docker compose exec ingest /entrypoint.sh schema
+docker compose exec ingest vdb schema
 
 # 4. Sync and import data (example: a single source)
-docker compose exec ingest /entrypoint.sh sync redhat
-docker compose exec ingest /entrypoint.sh import redhat
+docker compose exec ingest vdb sync redhat
+docker compose exec ingest vdb import redhat
 
 # 5. Wire up the GraphQL API (once)
-docker compose exec ingest /entrypoint.sh hasura-init
+docker compose exec ingest vdb hasura-init
 ```
 
 The GraphQL endpoint is then at `http://localhost:8080/v1/graphql` and the Hasura
@@ -112,7 +112,7 @@ Hasura serves the schema directly. The `readonly` role has SELECT-only access to
 tables. Mint a token with:
 
 ```bash
-docker compose exec ingest /entrypoint.sh create-token --ttl 90
+docker compose exec ingest vdb create-token --ttl 90
 ```
 
 and pass it as `Authorization: Bearer <token>`. Example queries are in
