@@ -44,3 +44,4 @@ def sync(dirs: dict) -> None:
         for _ in csv.DictReader(f):
             total += 1
     print(f"  NVD: {total:,} CVEs in mirror")
+
