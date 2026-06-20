@@ -28,7 +28,12 @@ def _load_adv_map(base: Path) -> dict:
 
 def _transform_vex_file(f: Path, *, adv_map):
     """Module-level so functools.partial of this is picklable for multiprocessing."""
-    data = json.loads(f.read_bytes())
+    raw = f.read_bytes()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        import json as _stdlib_json
+        data = _stdlib_json.loads(raw.decode("utf-8", errors="replace"))
     return transform(data, adv_map)
 
 
