@@ -33,9 +33,8 @@ SYNC TARGETS
 IMPORT VENDORS
 
   OS / Distro
-  nvd           NVD CVE data  (NVD API 2.0 — requires: sync nvd)
-  nvd-github    NVD CVE data via GitHub mirror, incremental by _state.csv sha256
-                (requires: sync nvd-github; swap source with NVD_GITHUB_REPO)
+  nvd           NVD CVE data via Limozacloud mirror, incremental by _state.csv sha256
+                (requires: sync nvd; swap source with NVD_MIRROR_REPO)
   redhat        Red Hat CVE data  (requires: sync redhat)
   suse          SUSE CSAF VEX
   ubuntu        Ubuntu OpenVEX (security-metadata.canonical.com)
@@ -82,7 +81,7 @@ from pathlib import Path
 
 from ingest.db import get_conn, sync_schema
 from ingest.utils import timer_start, timer_step, timer_summary
-from ingest import nvd, nvd_github, epss, microsoft, bsi, ghsa, osv
+from ingest import nvd, epss, microsoft, bsi, ghsa, osv
 from ingest import cwe as _cwe_vendor
 from ingest import cisa_kev as _cisa_kev_vendor
 from ingest import cisa_ssvc
@@ -90,7 +89,6 @@ from ingest import exploitdb, poc_github, nuclei, metasploit
 from ingest import redhat, suse, ubuntu, oracle, debian
 from ingest import alpine, almalinux, rocky
 from ingest.nvd        import sync as _s_nvd
-from ingest.nvd_github import sync as _s_nvd_github
 from ingest.epss      import sync as _s_epss
 from ingest.microsoft import sync as _s_microsoft
 from ingest.cisa_kev  import sync as _s_cisa_kev
@@ -123,7 +121,6 @@ VENDORS = {
     "cpe":          _cpe_vendor.ingest,
     # 1. CVE base
     "nvd":          nvd.ingest,
-    "nvd-github":   nvd_github.ingest,
     # 2. Scoring & advisory (small, fast)
     "epss":         epss.ingest,
     "cisa_kev":     _cisa_kev_vendor.ingest,
@@ -152,7 +149,6 @@ VENDORS = {
 SYNCS = {
     # migrated — sync lives in vendor module
     "nvd":        _s_nvd,
-    "nvd-github": _s_nvd_github,
     "epss":       _s_epss,
     "microsoft":  _s_microsoft,
     "cisa_kev":   _s_cisa_kev,
@@ -179,8 +175,7 @@ SYNCS = {
 
 # (sync_command, path_that_must_exist) — checked before each ingest run
 VENDOR_REQUIRES: dict[str, tuple[str, str]] = {
-    "nvd":        ("sync nvd",         "{nvd}/api"),
-    "nvd-github": ("sync nvd-github",  "{nvd_github}/_state.csv"),
+    "nvd":        ("sync nvd",         "{nvd}/_state.csv"),
     "redhat":     ("sync redhat",      "{redhat}/checkpoint.json"),
     "suse":       ("sync suse",        "{suse_vex}/checkpoint.json"),
     "ubuntu":     ("sync ubuntu",      "{ubuntu_usn}/.git"),
@@ -218,7 +213,6 @@ def _check_requires(vendor: str, dirs: dict) -> bool:
 
 DIRS = {
     "nvd":      os.environ.get("NVD_DIR",      "/data/nvd"),
-    "nvd_github": os.environ.get("NVD_GITHUB_DIR", "/data/nvd-github"),
     "redhat":   os.environ.get("REDHAT_DIR",   "/data/redhat"),
     "msrc":     os.environ.get("MSRC_DIR",     "/data/msrc"),
     "suse_vex": os.environ.get("SUSE_VEX_DIR", "/data/suse-vex"),
@@ -568,9 +562,9 @@ def main():
         # Only when truncating all tables — partial truncates keep the manifests.
         if not [a for a in args[1:] if not a.startswith("--")]:
             manifests = [
-                Path(DIRS["nvd_github"]) / "_state.imported.csv",
-                Path(DIRS["redhat"])     / ".import_state.json",
-                Path(DIRS["suse_vex"])   / ".import_state.json",
+                Path(DIRS["nvd"])    / "_state.imported.csv",
+                Path(DIRS["redhat"]) / ".import_state.json",
+                Path(DIRS["suse_vex"]) / ".import_state.json",
             ]
             removed = []
             for m in manifests:
