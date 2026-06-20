@@ -1,5 +1,12 @@
 from ingest import json_compat as json
 
+# Only CPE type 'a' (application) goes to lve_upstream.
+# OS CPEs are distro packages covered by dedicated importers, except the
+# Linux kernel which is a genuine upstream project.
+_UPSTREAM_OS_ALLOWLIST = frozenset({
+    "linux:linux_kernel",
+})
+
 _STATUS_MAP = {
     "Analyzed":            "cve_assigned",
     "Modified":            "cve_assigned",
@@ -110,6 +117,49 @@ def transform(doc: dict) -> list[dict]:
             "detail": cve_id,
         })
 
+    upstream = []
+    seen_upstream = set()
+    for config in doc.get("configurations", []):
+        for node in config.get("nodes", []):
+            for cpe_match in node.get("cpeMatch", []):
+                if not cpe_match.get("vulnerable", True):
+                    continue
+                parts = cpe_match.get("criteria", "").split(":")
+                if len(parts) < 5:
+                    continue
+                cpe_type, vendor, product = parts[2], parts[3], parts[4]
+                uid = "%s:%s" % (vendor, product)
+                if cpe_type != "a" and uid not in _UPSTREAM_OS_ALLOWLIST:
+                    continue
+                if uid in seen_upstream:
+                    continue
+                seen_upstream.add(uid)
+
+                fix_version = cpe_match.get("versionEndExcluding")
+                ranges = None
+                r = {}
+                if cpe_match.get("versionStartIncluding"):
+                    r["introduced"] = cpe_match["versionStartIncluding"]
+                elif cpe_match.get("versionStartExcluding"):
+                    r["introduced"] = cpe_match["versionStartExcluding"]
+                if cpe_match.get("versionEndExcluding"):
+                    r["fixed"] = cpe_match["versionEndExcluding"]
+                elif cpe_match.get("versionEndIncluding"):
+                    r["last_affected"] = cpe_match["versionEndIncluding"]
+                if r:
+                    ranges = [r]
+
+                upstream.append({
+                    "@id":         "%s:%s:%s" % (cve_id, vendor, product),
+                    "purl":        "pkg:generic/%s/%s" % (vendor, product),
+                    "fix_version": fix_version,
+                    "fix_commit":  None,
+                    "ranges":      ranges,
+                    "versions":    None,
+                    "source":      "nvd",
+                    "advisory":    cve_id,
+                })
+
     return [{
         "aliases":      [cve_id],
         "cve": {
@@ -124,7 +174,7 @@ def transform(doc: dict) -> list[dict]:
         "cwes":         cwes,
         "references":   refs,
         "advisories":   [],
-        "upstream":     [],
+        "upstream":     upstream,
         "packages":     [],
         "exploits":     [],
         "notices":      [],
