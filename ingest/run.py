@@ -423,7 +423,7 @@ def main():
             "lve_mitigations", "lve_impacts",
             "lve_exploits", "lve_history",
         ]
-        ALL_TABLES = ["lve", "lve_cve", "notices", "cwe"] + CHILD_TABLES
+        ALL_TABLES = ["lve", "lve_cve", "notices", "cwe", "cpe"] + CHILD_TABLES
 
         print("Tracking tables...")
         for t in ALL_TABLES:
