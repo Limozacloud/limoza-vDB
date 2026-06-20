@@ -71,8 +71,7 @@ services:
       - ./config/schedule.json:/config/schedule.json:ro
     depends_on:
       - postgres
-    profiles:
-      - ingest
+    restart: unless-stopped
 
   hasura:
     image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
