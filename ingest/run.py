@@ -65,13 +65,13 @@ IMPORT VENDORS
 
 EXAMPLES
 
-  docker compose run --rm ingest sync nvd
-  docker compose run --rm ingest sync exploitdb
+  docker compose exec ingest vdb sync nvd
+  docker compose exec ingest vdb sync exploitdb
 
-  docker compose run --rm ingest import redhat
-  docker compose run --rm ingest import redhat --cve CVE-2024-3094
-  docker compose run --rm ingest import nvd redhat suse ubuntu
-  docker compose run --rm ingest import all
+  docker compose exec ingest vdb import redhat
+  docker compose exec ingest vdb import redhat --cve CVE-2024-3094
+  docker compose exec ingest import nvd redhat suse ubuntu
+  docker compose exec ingest import all
 
 """
 import inspect
