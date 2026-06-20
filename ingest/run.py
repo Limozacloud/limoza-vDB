@@ -70,8 +70,8 @@ EXAMPLES
 
   docker compose exec ingest vdb import redhat
   docker compose exec ingest vdb import redhat --cve CVE-2024-3094
-  docker compose exec ingest import nvd redhat suse ubuntu
-  docker compose exec ingest import all
+  docker compose exec ingest vdb import nvd redhat suse ubuntu
+  docker compose exec ingest vdb import all
 
 """
 import inspect
