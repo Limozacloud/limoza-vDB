@@ -1,13 +1,13 @@
 # Ingest CLI
 
 All operations run through the `ingest` container, which runs continuously as an idle
-service. Use `docker compose exec ingest …` to run commands inside it:
+service. Use `docker compose exec ingest /entrypoint.sh …` to run commands inside it:
 
 ```bash
-docker compose exec ingest <command> [args]
+docker compose exec ingest /entrypoint.sh <command> [args]
 ```
 
-Running `ingest` with no command prints the built-in help.
+Running the container with no command (`docker compose up -d ingest`) keeps it idle — it does not print help.
 
 ## Command overview
 
@@ -28,9 +28,9 @@ Downloads raw source data into the local `/data/<source>` volumes. Must run befo
 `import`. Each source has its own target; `sync all` fetches everything.
 
 ```bash
-docker compose exec ingest sync redhat
-docker compose exec ingest sync nvd epss cisa_kev      # several at once
-docker compose exec ingest sync all
+docker compose exec ingest /entrypoint.sh sync redhat
+docker compose exec ingest /entrypoint.sh sync nvd epss cisa_kev      # several at once
+docker compose exec ingest /entrypoint.sh sync all
 ```
 
 Sources support incremental sync where the upstream allows it (checkpoints / change
@@ -44,9 +44,9 @@ Reads the synced data and writes it into the unified **LVE record** (tables `lve
 that the matching `sync` has been done and skips with a hint if not.
 
 ```bash
-docker compose exec ingest import redhat
-docker compose exec ingest import nvd redhat suse ubuntu
-docker compose exec ingest import all
+docker compose exec ingest /entrypoint.sh import redhat
+docker compose exec ingest /entrypoint.sh import nvd redhat suse ubuntu
+docker compose exec ingest /entrypoint.sh import all
 ```
 
 Import order does **not** matter — the schema is order-independent, and only NVD writes
@@ -57,7 +57,7 @@ overwrites another's non-null data.
 testing a mapping:
 
 ```bash
-docker compose exec ingest import nvd redhat suse --cve CVE-2024-3094
+docker compose exec ingest /entrypoint.sh import nvd redhat suse --cve CVE-2024-3094
 ```
 
 ## pipeline
@@ -65,7 +65,7 @@ docker compose exec ingest import nvd redhat suse --cve CVE-2024-3094
 Runs a `sync` followed by an `import` for a job defined in `config/schedule.json`.
 
 ```bash
-docker compose exec ingest pipeline daily
+docker compose exec ingest /entrypoint.sh pipeline daily
 ```
 
 The `ofelia` service runs this automatically at 02:30 every night (`config/ofelia.ini`).
@@ -77,7 +77,7 @@ applies the schema automatically, so you only need this to apply schema changes 
 importing data.
 
 ```bash
-docker compose exec ingest schema
+docker compose exec ingest /entrypoint.sh schema
 ```
 
 ## hasura-init
@@ -87,7 +87,7 @@ array relationships between `lve` and its child tables, and grants the `readonly
 SELECT access. See [GraphQL & Hasura](graphql.md).
 
 ```bash
-docker compose exec ingest hasura-init
+docker compose exec ingest /entrypoint.sh hasura-init
 ```
 
 ## create-token
@@ -96,8 +96,8 @@ Mints a read-only JWT for the GraphQL API (default TTL 1 day). Requires
 `HASURA_JWT_SECRET` in `.env`.
 
 ```bash
-docker compose exec ingest create-token            # 1-day token
-docker compose exec ingest create-token --ttl 90   # 90-day token
+docker compose exec ingest /entrypoint.sh create-token            # 1-day token
+docker compose exec ingest /entrypoint.sh create-token --ttl 90   # 90-day token
 ```
 
 See [GraphQL & Hasura → tokens](graphql.md#read-only-tokens).
@@ -108,8 +108,8 @@ Empties data tables. Truncating **all** tables requires `--yes`; naming specific
 does not.
 
 ```bash
-docker compose exec ingest truncate lve_packages    # one table
-docker compose exec ingest truncate --yes           # everything
+docker compose exec ingest /entrypoint.sh truncate lve_packages    # one table
+docker compose exec ingest /entrypoint.sh truncate --yes           # everything
 ```
 
 ## verify
@@ -118,7 +118,7 @@ Fetches a CVE from upstream OSV and compares it against what the database holds 
 quick sanity check for coverage gaps.
 
 ```bash
-docker compose exec ingest verify CVE-2024-3094
+docker compose exec ingest /entrypoint.sh verify CVE-2024-3094
 ```
 
 ## Running ad-hoc Python

@@ -53,7 +53,7 @@ A fresh Hasura instance knows nothing about the tables. Run this once after the 
 `import`:
 
 ```bash
-docker compose exec ingest hasura-init
+docker compose exec ingest /entrypoint.sh hasura-init
 ```
 
 It performs three things:
@@ -89,7 +89,7 @@ started with):
 echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 
 # Mint a token (default TTL 1 day; --ttl sets days)
-docker compose exec ingest create-token --ttl 90
+docker compose exec ingest /entrypoint.sh create-token --ttl 90
 ```
 
 Pass it as a bearer token:

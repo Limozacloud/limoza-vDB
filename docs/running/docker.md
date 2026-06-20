@@ -59,14 +59,14 @@ echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 docker compose up -d postgres hasura ingest
 
 # 4. Apply the database schema (idempotent)
-docker compose exec ingest schema
+docker compose exec ingest /entrypoint.sh schema
 
 # 5. Download and import data (start small, or use `all`)
-docker compose exec ingest sync redhat
-docker compose exec ingest import redhat
+docker compose exec ingest /entrypoint.sh sync redhat
+docker compose exec ingest /entrypoint.sh import redhat
 
 # 6. Wire up the GraphQL API (once)
-docker compose exec ingest hasura-init
+docker compose exec ingest /entrypoint.sh hasura-init
 ```
 
 After this, the GraphQL endpoint is at `http://localhost:8080/v1/graphql` and the
