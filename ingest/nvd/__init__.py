@@ -9,9 +9,6 @@ Parallel import: targets are split into N_WORKERS chunks; each worker opens its 
 DB connection and commits every COMMIT_EVERY CVEs.
 """
 import csv
-import datetime
-import gzip
-import json
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -108,49 +105,6 @@ def _import_chunk(args):
     return done, total, errors, missing
 
 
-def _import_modified(conn, base: Path) -> None:
-    modified_gz = base / "modified.json.gz"
-    if not modified_gz.exists():
-        return
-
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
-    with gzip.open(modified_gz, "rb") as f:
-        feed = json.loads(f.read())
-
-    cves = feed.get("CVE_Items") or feed.get("vulnerabilities") or []
-    recent = []
-    for item in cves:
-        cve_obj = item.get("cve") or item
-        mod = cve_obj.get("lastModified") or cve_obj.get("lastModifiedDate") or cve_obj.get("published") or ""
-        try:
-            if mod and datetime.datetime.fromisoformat(mod.replace("Z", "+00:00")) >= cutoff:
-                recent.append(item)
-        except (ValueError, AttributeError):
-            pass
-
-    if not recent:
-        print("  NVD: no CVEs in modified feed from last 2 days")
-        return
-
-    print(f"  NVD: importing {len(recent)} CVEs from modified feed (last 2 days) ...")
-    from ingest.db import RecordBatch
-    batch = RecordBatch()
-    ok = errors = 0
-    with conn.cursor() as cur:
-        for item in recent:
-            try:
-                raw = json.dumps(item.get("cve") or item).encode()
-                for record in transform(parse(raw)):
-                    batch.add(cur, record)
-                ok += 1
-            except Exception as e:
-                errors += 1
-                if errors <= 3:
-                    print(f"  NVD modified error: {e}")
-        batch.flush(cur)
-    conn.commit()
-    print(f"  NVD: {ok} recent CVEs imported · {errors} errors")
-
 
 def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     base      = Path(dirs["nvd"])
@@ -225,5 +179,3 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     prev.update(done)
     _write_snapshot(snapshot, prev)
     print(f"  NVD: import manifest updated ({len(prev):,} CVEs tracked)")
-
-    _import_modified(conn, base)
