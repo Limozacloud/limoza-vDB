@@ -1,8 +1,17 @@
-import json
+from ingest import json_compat as json
+import multiprocessing as mp
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_files
+from ingest.incremental import ImportState
 from ingest.ghsa.transform import transform
+
+N_WORKERS = mp.cpu_count()
+
+
+def _transform_file(f: Path):
+    records = transform(json.loads(f.read_bytes()))
+    return records if records else None
 
 
 def _walk(base: Path):
@@ -46,22 +55,18 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         files = [base / p for p in idx.get(cve_filter, [])]
         print(f"  GHSA: filter {cve_filter} → {len(files)} advisories")
     else:
-        files = list(_walk(base))
-        print(f"  GHSA: {len(files)} advisory files")
+        state = ImportState(base / ".import_state.json", base)
+        all_files = list(_walk(base))
+        files = state.changed(all_files)
+        print(f"  GHSA: {len(files)} changed of {len(all_files)} advisory files")
 
-    total   = 0
-    skipped = 0
-    with conn.cursor() as cur:
-        for f in files:
-            try:
-                records = transform(json.loads(Path(f).read_bytes()))
-                for r in records:
-                    upsert_lve_record(cur, r)
-                    total += 1
-                if not records:
-                    skipped += 1
-            except Exception as e:
-                print(f"  Error {Path(f).name}: {e}")
-
-    conn.commit()
+    total, skipped, errors = ingest_files(
+        conn,
+        files,
+        _transform_file,
+        label="GHSA",
+        cve_filter=cve_filter,
+        n_workers=N_WORKERS if not cve_filter else 1,
+        state=state if not cve_filter else None,
+    )
     print(f"  GHSA: {total} LVE records upserted · {skipped} skipped (no CVE alias or withdrawn)")

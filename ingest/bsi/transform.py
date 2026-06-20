@@ -1,5 +1,5 @@
 """Transform BSI WID CSAF advisories → upsert_lve_record format."""
-import json
+from ingest import json_compat as json
 from pathlib import Path
 from typing import Optional
 

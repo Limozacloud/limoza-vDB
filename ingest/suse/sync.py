@@ -8,7 +8,7 @@ Subsequent: reads changes.csv for each, fetches only files changed since last sy
 """
 import csv
 import io
-import json
+from ingest import json_compat as json
 import subprocess
 import threading
 import time

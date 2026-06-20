@@ -1,5 +1,5 @@
 import re
-import json
+from ingest import json_compat as json
 import jmespath
 from ingest.mapping import apply_mapping, strip_html, map_severity
 from ingest.cpe import validate as _cpe_validate

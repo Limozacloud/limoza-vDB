@@ -75,7 +75,7 @@ EXAMPLES
 
 """
 import inspect
-import json
+from ingest import json_compat as json
 import os
 import sys
 from pathlib import Path

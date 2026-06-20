@@ -1,4 +1,4 @@
-import json
+from ingest import json_compat as json
 
 
 def parse(raw: bytes) -> dict:

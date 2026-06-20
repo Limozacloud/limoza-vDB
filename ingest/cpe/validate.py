@@ -7,7 +7,7 @@ imports work without CPE data present.
 """
 from __future__ import annotations
 
-import json
+from ingest import json_compat as json
 from pathlib import Path
 from typing import Optional
 

@@ -1,5 +1,5 @@
 """Ingest AlmaLinux errata data."""
-import json
+from ingest import json_compat as json
 from pathlib import Path
 
 from ingest.db import ingest_records

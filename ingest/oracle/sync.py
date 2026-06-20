@@ -1,6 +1,6 @@
 """Sync Oracle Linux OVAL from linux.oracle.com."""
 import bz2
-import json
+from ingest import json_compat as json
 import time
 import urllib.request
 from pathlib import Path

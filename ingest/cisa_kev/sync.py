@@ -1,4 +1,4 @@
-import json
+from ingest import json_compat as json
 import os
 import subprocess
 from pathlib import Path

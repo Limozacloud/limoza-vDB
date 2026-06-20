@@ -1,5 +1,5 @@
 """Sync AlmaLinux errata from errata.almalinux.org."""
-import json
+from ingest import json_compat as json
 import urllib.request
 from pathlib import Path
 

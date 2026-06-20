@@ -1,4 +1,4 @@
-import json
+from ingest import json_compat as json
 
 _STATUS_MAP = {
     "Analyzed":            "cve_assigned",

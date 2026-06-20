@@ -1,6 +1,7 @@
 """Ingest SUSE CVE data from local CSAF VEX and Advisory caches."""
 import functools
-import json
+from ingest import json_compat as json
+import multiprocessing as mp
 from pathlib import Path
 
 from ingest.db import ingest_files
@@ -8,7 +9,7 @@ from ingest.incremental import ImportState
 from ingest.suse.transform import transform, transform_advisory
 from psycopg2.extras import execute_values
 
-N_WORKERS = 8
+N_WORKERS = mp.cpu_count()
 
 
 def _adv_slug(adv_id: str) -> str:

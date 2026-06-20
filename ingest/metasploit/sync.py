@@ -1,4 +1,4 @@
-import json
+from ingest import json_compat as json
 import re
 import subprocess
 from pathlib import Path
@@ -12,7 +12,7 @@ def sync(dirs: dict) -> None:
     print("── sync metasploit ──")
     if (repo_dir / ".git").exists():
         print("  Pulling metasploit-framework (modules only)...")
-        subprocess.run(["git", "-C", str(repo_dir), "pull", "--ff-only"], check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "pull", "--ff-only", "--no-recurse-submodules"], check=True)
     else:
         print("  Cloning metasploit-framework (sparse, modules only)...")
         repo_dir.mkdir(parents=True, exist_ok=True)

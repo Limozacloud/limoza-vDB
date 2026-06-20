@@ -1,5 +1,5 @@
 """Compare OSV advisory data vs DB for a given CVE."""
-import json
+from ingest import json_compat as json
 import re
 from collections import Counter
 from pathlib import Path

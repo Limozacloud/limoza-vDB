@@ -1,4 +1,4 @@
-import json
+from ingest import json_compat as json
 
 # CISA vulnrichment stores values in title-case ("Active", "Yes", "Total")
 # our schema expects lowercase ("active", "yes", "total")

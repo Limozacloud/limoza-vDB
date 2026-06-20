@@ -1,7 +1,7 @@
 """CPE Dictionary import — loads cpe_dict.json into the `cpe` table."""
 from __future__ import annotations
 
-import json
+from ingest import json_compat as json
 from pathlib import Path
 
 from psycopg2.extras import execute_values

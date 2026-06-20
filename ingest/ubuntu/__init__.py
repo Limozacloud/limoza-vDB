@@ -1,12 +1,14 @@
 """Ingest Ubuntu CVE data from canonical/ubuntu-security-notices."""
 import functools
-import json
+from ingest import json_compat as json
+import multiprocessing as mp
 from pathlib import Path
 
 from ingest.db import ingest_files
+from ingest.incremental import ImportState
 from ingest.ubuntu.transform import transform
 
-N_WORKERS = 4
+N_WORKERS = mp.cpu_count()
 
 
 def _load_usn_map(base: Path) -> tuple:
@@ -74,17 +76,20 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
         print(f"  Ubuntu VEX: {vex_base} not found — run `sync ubuntu` first")
         return
 
+    state = ImportState(base / ".import_state.json", base)
+
     if cve_filter:
         fname = cve_filter.upper() + ".json"
         found = next(vex_base.rglob(fname), None)
         files = [found] if found else []
         print(f"  Ubuntu VEX: filter {cve_filter} → {len(files)} files")
     else:
-        files = sorted(vex_base.rglob("CVE-*.json"))
-        print(f"  Ubuntu VEX: {len(files):,} CVE files")
+        all_files = sorted(vex_base.rglob("CVE-*.json"))
+        files = state.changed(all_files)
+        print(f"  Ubuntu VEX: {len(files):,} changed of {len(all_files):,} CVE files")
 
     fn = functools.partial(_transform_file,
                            usn_meta=usn_meta, cve_to_usn=cve_to_usn, osv_index=osv_index)
     total, skipped, errors = ingest_files(conn, files, fn,
-        label="Ubuntu VEX", n_workers=N_WORKERS, cve_filter=cve_filter)
+        label="Ubuntu VEX", n_workers=N_WORKERS, cve_filter=cve_filter, state=state)
     print(f"  Ubuntu VEX: {total:,} upserted · {skipped} skipped · {errors} errors")

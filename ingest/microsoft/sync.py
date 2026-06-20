@@ -1,5 +1,5 @@
 """Download MSRC CVRF monthly bulletins to {msrc_dir}/cvrf/."""
-import json
+from ingest import json_compat as json
 import time
 from pathlib import Path
 

@@ -153,7 +153,7 @@ def transform(data: dict, adv_map: dict | None = None) -> Optional[dict]:
                     "version":  _CVSS_VER.get(key, "3.1"),
                     "score":    float(score),
                     "vector":   vec,
-                    "severity": base_sev.lower() if base_sev and base_sev.lower() in ("critical","high","medium","low","informational") else None,
+                    "severity": base_sev.lower() if base_sev and base_sev.lower() in ("critical","high","medium","low","informational","none") else None,
                     "source":   "suse",
                     "advisory": None,
                 })

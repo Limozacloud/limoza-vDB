@@ -1,8 +1,8 @@
 """Ingest Debian Security Tracker data."""
-import json
+from ingest import json_compat as json
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_records
 from ingest.debian.transform import transform, parse_adv_list
 
 
@@ -38,28 +38,10 @@ def ingest(conn, dirs: dict, cve_filter: str = None) -> None:
     print("  Debian tracker: loading data.json...")
     data = json.loads(data_path.read_bytes())
 
-    total = skipped = errors = 0
-
-    with conn.cursor() as cur:
-        for i, record in enumerate(transform(data, adv_map, adv_dates, adv_titles)):
-            cve_id = record["cve"]["cve_id"]
-            if cve_filter and cve_id != cve_filter.upper():
-                skipped += 1
-                continue
-            try:
-                cur.execute("SAVEPOINT sp")
-                upsert_lve_record(cur, record)
-                total += 1
-                cur.execute("RELEASE SAVEPOINT sp")
-            except Exception as e:
-                cur.execute("ROLLBACK TO SAVEPOINT sp")
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error {cve_id}: {e}")
-
-            if not cve_filter and (i + 1) % 10000 == 0:
-                conn.commit()
-                print(f"  {i + 1} records...")
-
-    conn.commit()
+    total, skipped, errors = ingest_records(
+        conn,
+        transform(data, adv_map, adv_dates, adv_titles),
+        label="Debian tracker",
+        cve_filter=cve_filter,
+    )
     print(f"  Debian tracker: {total} upserted · {skipped} skipped · {errors} errors")

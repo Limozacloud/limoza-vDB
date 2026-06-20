@@ -7,7 +7,7 @@ Ecosystems downloaded: AlmaLinux, Rocky Linux, Red Hat, Debian, Ubuntu, Alpine.
 """
 import concurrent.futures
 import io
-import json
+from ingest import json_compat as json
 import threading
 import urllib.request
 import zipfile
