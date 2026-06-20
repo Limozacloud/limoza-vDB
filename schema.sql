@@ -95,6 +95,26 @@ CREATE TABLE IF NOT EXISTS lve_cwes (
     UNIQUE (lve_id, cwe_id, source)
 );
 
+-- ── CPE Dictionary ───────────────────────────────────────────────────────────
+-- NVD CPE 2.3 dictionary (~1.7M entries). Populated via `import cpe`.
+-- Used to resolve vendor/product metadata and filter packager CPEs from NVD upstream imports.
+CREATE TABLE IF NOT EXISTS cpe (
+    cpe_name_id  TEXT        PRIMARY KEY,
+    cpe_uri      TEXT        NOT NULL,
+    type         TEXT,                    -- 'a' application, 'o' OS, 'h' hardware
+    vendor       TEXT,
+    product      TEXT,
+    version      TEXT,
+    title_en     TEXT,
+    deprecated   BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ,
+    modified_at  TIMESTAMPTZ,
+    ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cpe_vendor_product ON cpe (vendor, product);
+CREATE INDEX IF NOT EXISTS idx_cpe_type           ON cpe (type);
+
 -- ── CWE Dictionary ─────────────────────────────────────────────────────────────
 -- Shared weakness definitions (one row per CWE, ~940 total), enriched from the
 -- CWE-CAPEC json_repo/W/*.json clone. Populated on-reference: whenever an

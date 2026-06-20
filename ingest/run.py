@@ -101,6 +101,7 @@ from ingest.redhat    import sync as _s_redhat
 from ingest.suse      import sync as _s_suse
 import types as _types
 from ingest.cpe import sync as _s_cpe                                      # module with .sync()
+import ingest.cpe as _cpe_vendor
 _s_cpe_index = _types.SimpleNamespace(sync=_s_cpe.sync_index)             # adapts .sync_index() → .sync()
 from ingest.exploitdb  import sync as _s_exploitdb
 from ingest.nuclei     import sync as _s_nuclei
@@ -119,6 +120,7 @@ from ingest.osv       import compare as _osv_compare
 VENDORS = {
     # 0. Reference data (run before CVE imports)
     "cwe":          _cwe_vendor.ingest,
+    "cpe":          _cpe_vendor.ingest,
     # 1. CVE base
     "nvd":          nvd.ingest,
     "nvd-github":   nvd_github.ingest,

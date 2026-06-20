@@ -40,6 +40,26 @@
       "enum": ["critical", "high", "medium", "low", "informational", null]
     },
 
+    "cpe": {
+      "title": "CpeDictionaryEntry",
+      "description": "NVD CPE 2.3 dictionary entry — one row per CPE name (~1.7M total). Populated via `import cpe`. Used to resolve vendor/product metadata and filter packager CPEs from NVD upstream imports. type: 'a'=application, 'o'=OS, 'h'=hardware.",
+      "type": "object",
+      "required": ["cpe_name_id"],
+      "additionalProperties": false,
+      "properties": {
+        "cpe_name_id": { "type": "string", "description": "NVD CPE name UUID (primary key)." },
+        "cpe_uri":     { "type": "string", "description": "Full CPE 2.3 URI.", "examples": ["cpe:2.3:a:apache:tomcat:9.0.0:*:*:*:*:*:*:*"] },
+        "type":        { "type": ["string", "null"], "description": "CPE component type.", "examples": ["a", "o", "h"] },
+        "vendor":      { "type": ["string", "null"], "description": "Vendor name as in CPE URI.", "examples": ["apache", "microsoft"] },
+        "product":     { "type": ["string", "null"], "description": "Product name as in CPE URI.", "examples": ["tomcat", "windows_server"] },
+        "version":     { "type": ["string", "null"], "description": "Version string, '-' means N/A.", "examples": ["9.0.0", "-"] },
+        "title_en":    { "type": ["string", "null"], "description": "Human-readable English title.", "examples": ["Apache Tomcat 9.0.0"] },
+        "deprecated":  { "type": "boolean", "description": "Whether this CPE has been deprecated by NVD." },
+        "created_at":  { "type": ["string", "null"], "format": "date-time" },
+        "modified_at": { "type": ["string", "null"], "format": "date-time" },
+        "ingested_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
     "cwe": {
       "title": "CweDictionaryEntry",
       "description": "Standalone CWE weakness definition — one row per weakness, shared across all LVEs. This is NOT part of a vulnerability record; it lives independently in the `cwe` dictionary table. A vulnerability record's cwes[].id joins here by cwe_id. Populated on-reference from the CWE-CAPEC json_repo/W dictionary (mitigations, consequences, likelihood, …) so consumers have full weakness context from the database alone.",
