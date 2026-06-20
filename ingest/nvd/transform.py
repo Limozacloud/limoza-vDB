@@ -118,7 +118,7 @@ def transform(doc: dict) -> list[dict]:
         })
 
     upstream = []
-    seen_upstream = set()
+    upstream_by_uid: dict = {}
     for config in doc.get("configurations", []):
         for node in config.get("nodes", []):
             for cpe_match in node.get("cpeMatch", []):
@@ -131,12 +131,8 @@ def transform(doc: dict) -> list[dict]:
                 uid = "%s:%s" % (vendor, product)
                 if cpe_type != "a" and uid not in _UPSTREAM_OS_ALLOWLIST:
                     continue
-                if uid in seen_upstream:
-                    continue
-                seen_upstream.add(uid)
 
                 fix_version = cpe_match.get("versionEndExcluding")
-                ranges = None
                 r = {}
                 if cpe_match.get("versionStartIncluding"):
                     r["introduced"] = cpe_match["versionStartIncluding"]
@@ -146,19 +142,25 @@ def transform(doc: dict) -> list[dict]:
                     r["fixed"] = cpe_match["versionEndExcluding"]
                 elif cpe_match.get("versionEndIncluding"):
                     r["last_affected"] = cpe_match["versionEndIncluding"]
-                if r:
-                    ranges = [r]
 
-                upstream.append({
-                    "@id":         "%s:%s:%s" % (cve_id, vendor, product),
-                    "purl":        "pkg:generic/%s/%s" % (vendor, product),
-                    "fix_version": fix_version,
-                    "fix_commit":  None,
-                    "ranges":      ranges,
-                    "versions":    None,
-                    "source":      "nvd",
-                    "advisory":    cve_id,
-                })
+                if uid in upstream_by_uid:
+                    if r:
+                        upstream_by_uid[uid]["ranges"] = (upstream_by_uid[uid]["ranges"] or []) + [r]
+                    if fix_version and not upstream_by_uid[uid]["fix_version"]:
+                        upstream_by_uid[uid]["fix_version"] = fix_version
+                else:
+                    entry = {
+                        "@id":         "%s:%s:%s" % (cve_id, vendor, product),
+                        "purl":        "pkg:generic/%s/%s" % (vendor, product),
+                        "fix_version": fix_version,
+                        "fix_commit":  None,
+                        "ranges":      [r] if r else None,
+                        "versions":    None,
+                        "source":      "nvd",
+                        "advisory":    cve_id,
+                    }
+                    upstream_by_uid[uid] = entry
+                    upstream.append(entry)
 
     return [{
         "aliases":      [cve_id],
