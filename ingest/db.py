@@ -126,11 +126,22 @@ def ingest_records(
                     print(f"  Error: {e}", flush=True)
             processed += 1
             if not cve_filter and processed % commit_every == 0:
-                batch.flush(cur)
-                conn.commit()
-                print(f"  {label}: {processed:,}", flush=True)
-        batch.flush(cur)
-    conn.commit()
+                try:
+                    batch.flush(cur)
+                    conn.commit()
+                    print(f"  {label}: {processed:,}", flush=True)
+                except Exception as e:
+                    conn.rollback()
+                    errors += 1
+                    batch._clear()
+                    print(f"  {label}: flush error at {processed:,}: {e}", flush=True)
+        try:
+            batch.flush(cur)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            errors += 1
+            print(f"  {label}: final flush error: {e}", flush=True)
     return total, skipped, errors
 
 
