@@ -1,5 +1,5 @@
 import datetime
-import json
+from ingest import json_compat as json
 import multiprocessing as mp
 import os
 import subprocess
@@ -145,6 +145,8 @@ def _ingest_files_worker(args):
     total = skipped = errors = 0
     n     = len(chunk)
     batch = _Batch()
+    done_files: list = []
+    batch_files: list = []
 
     with conn.cursor() as cur:
         for i, f in enumerate(chunk):
@@ -152,12 +154,14 @@ def _ingest_files_worker(args):
                 records = transform_fn(f)
                 if not records:
                     skipped += 1
+                    batch_files.append(str(f))
                     continue
                 if isinstance(records, dict):
                     records = [records]
                 for rec in records:
                     batch.add(cur, rec)
                     total += 1
+                batch_files.append(str(f))
             except Exception as e:
                 errors += 1
                 if errors <= 3:
@@ -167,23 +171,27 @@ def _ingest_files_worker(args):
                 try:
                     batch.flush(cur)
                     conn.commit()
+                    done_files.extend(batch_files)
                 except Exception as e:
                     conn.rollback()
                     errors += 1
                     print(f"  [w{worker_id}] Flush error at {i+1:,}: {e}", flush=True)
                     batch._clear()
+                finally:
+                    batch_files = []
                 print(f"  [w{worker_id}] {i+1:,}/{n:,}", flush=True)
 
         try:
             batch.flush(cur)
+            conn.commit()
+            done_files.extend(batch_files)
         except Exception as e:
             conn.rollback()
             errors += 1
             print(f"  [w{worker_id}] Final flush error: {e}", flush=True)
 
-    conn.commit()
     conn.close()
-    return total, skipped, errors
+    return total, skipped, errors, done_files
 
 
 def ingest_files(
@@ -223,11 +231,16 @@ def ingest_files(
         print(f"  {label}: {n} workers · ~{chunk_size:,} files each")
         total = skipped = errors = 0
         with mp.Pool(n) as pool:
-            for w_total, w_skipped, w_errors in pool.imap_unordered(_ingest_files_worker, worker_args):
+            for w_total, w_skipped, w_errors, w_done in pool.imap_unordered(_ingest_files_worker, worker_args):
                 total   += w_total
                 skipped += w_skipped
                 errors  += w_errors
+                if state:
+                    for f in w_done:
+                        state.mark(Path(f))
                 print(f"  {label}: worker done · {total:,}/{len(files):,} records", flush=True)
+        if state and not cve_filter:
+            state.commit()
         return total, skipped, errors
 
     # Single-process — RecordBatch batches child-table inserts; SAVEPOINT isolates lve lookup errors

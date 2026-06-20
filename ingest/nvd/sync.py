@@ -12,7 +12,7 @@ Rate limits (sliding 30-second window):
 
 Set NVD_API_KEY env var to use the higher limit.
 """
-import json
+from ingest import json_compat as json
 import os
 import time
 from collections import deque

@@ -1,10 +1,18 @@
 """OSV package ecosystem importer."""
-import json
+from ingest import json_compat as json
+import multiprocessing as mp
 from pathlib import Path
 
-from ingest.db import upsert_lve_record
+from ingest.db import ingest_files
+from ingest.incremental import ImportState
 from ingest.osv.sync import PKG_ECOSYSTEMS, _eco_dir
 from ingest.osv.transform import transform
+
+N_WORKERS = mp.cpu_count()
+
+
+def _transform_file(f: Path):
+    return transform(json.loads(f.read_bytes()))
 
 
 def ingest(conn, dirs: dict, cve_filter: str | None = None) -> None:
@@ -26,27 +34,22 @@ def ingest(conn, dirs: dict, cve_filter: str | None = None) -> None:
         files = [f for f in files if any(f.is_relative_to(d) for d in pkg_eco_dirs)]
         print(f"  OSV: filter {cve_filter} → {len(files)} pkg-ecosystem files")
     else:
-        files = []
+        state = ImportState(base / ".import_state.json", base)
+        all_files = []
         for eco in PKG_ECOSYSTEMS:
             eco_dir = _eco_dir(base, eco)
             if eco_dir.exists():
-                files.extend(eco_dir.glob("*.json"))
+                all_files.extend(eco_dir.glob("*.json"))
+        files = state.changed(all_files)
+        print(f"  OSV: {len(files)} changed of {len(all_files)} files")
 
-    upserted = skipped = errors = 0
-    with conn.cursor() as cur:
-        for fpath in files:
-            try:
-                data = json.loads(fpath.read_bytes())
-                rec  = transform(data)
-                if rec is None:
-                    skipped += 1
-                    continue
-                upsert_lve_record(cur, rec)
-                upserted += 1
-            except Exception as e:
-                errors += 1
-                if errors <= 5:
-                    print(f"  OSV error {fpath.name}: {e}")
-        conn.commit()
-
-    print(f"  OSV: {upserted} upserted · {skipped} skipped · {errors} errors")
+    total, skipped, errors = ingest_files(
+        conn,
+        files,
+        _transform_file,
+        label="OSV",
+        cve_filter=cve_filter,
+        n_workers=N_WORKERS if not cve_filter else 1,
+        state=state if not cve_filter else None,
+    )
+    print(f"  OSV: {total} upserted · {skipped} skipped · {errors} errors")

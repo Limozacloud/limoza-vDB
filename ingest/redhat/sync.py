@@ -9,7 +9,7 @@ Subsequent: reads changes.csv and fetches only files changed since last sync.
 """
 import csv
 import io
-import json
+from ingest import json_compat as json
 import subprocess
 import time
 import urllib.request

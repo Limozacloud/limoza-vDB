@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS lve_cvss (
     version      TEXT             NOT NULL,
     score        DOUBLE PRECISION NOT NULL,
     vector       TEXT             NOT NULL,
-    severity     TEXT             CHECK (severity IN ('critical','high','medium','low','informational')),
+    severity     TEXT             CHECK (severity IN ('critical','high','medium','low','informational','none')),
     source       TEXT             NOT NULL,
     advisory_ref TEXT,
     product_id   TEXT,
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS lve_packages (
     source            TEXT    NOT NULL,
     advisory_ref      TEXT,
     upstream_ref      TEXT,
-    severity          TEXT    CHECK (severity IN ('critical','high','medium','low','informational')),
+    severity          TEXT    CHECK (severity IN ('critical','high','medium','low','informational','none')),
     vendor_data       JSONB,
     UNIQUE (lve_id, purl, source)
 );
@@ -252,23 +252,43 @@ CREATE TABLE IF NOT EXISTS lve_history (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lve_history_unique ON lve_history (lve_id, date, event, source, COALESCE(detail, ''));
 CREATE INDEX IF NOT EXISTS idx_lve_history_lve_id ON lve_history (lve_id, date DESC);
 
--- ── Migrations ────────────────────────────────────────────────────────────────
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS affected_state TEXT NOT NULL DEFAULT 'unknown'
-    CHECK (affected_state IN ('affected','not_affected','not_applicable','unknown'));
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS remediation_state TEXT NOT NULL DEFAULT 'unknown'
-    CHECK (remediation_state IN ('fixed','will_not_fix','pending','none','unknown'));
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS status_raw TEXT;
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS vex_justification TEXT
-    CHECK (vex_justification IN (
-        'component_not_present','vulnerable_code_not_present',
-        'vulnerable_code_not_in_execute_path',
-        'vulnerable_code_cannot_be_controlled_by_adversary',
-        'inline_mitigations_already_exist'
-    ));
-DO $$ BEGIN ALTER TABLE lve_packages DROP COLUMN fix_status;
-EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DROP INDEX IF EXISTS idx_lve_packages_fix_status;
-ALTER TABLE lve_upstream ADD COLUMN IF NOT EXISTS versions TEXT[];
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS field; EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS old_value; EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS new_value; EXCEPTION WHEN undefined_column THEN NULL; END $$;
+-- ── Performance indexes ───────────────────────────────────────────────────────
+-- lve_packages: FK lve_id has no index → full table scans on nested Hasura queries.
+CREATE INDEX IF NOT EXISTS idx_lve_packages_lve_id
+    ON lve_packages (lve_id);
+-- Composite covers vendor-filter queries (source → lve_id) and source-only queries.
+CREATE INDEX IF NOT EXISTS idx_lve_packages_source_lve
+    ON lve_packages (source, lve_id);
+
+-- lve_cve: partial indexes — only non-null rows, minimal write overhead.
+CREATE INDEX IF NOT EXISTS idx_lve_cve_published
+    ON lve_cve (published DESC NULLS LAST) WHERE published IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lve_cve_kev
+    ON lve_cve (kev_date_added) WHERE kev_date_added IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lve_cve_ssvc
+    ON lve_cve (ssvc_exploitation) WHERE ssvc_exploitation IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lve_cve_epss
+    ON lve_cve (epss_score DESC) WHERE epss_score IS NOT NULL;
+
+-- lve_cvss: composite covers (source, severity) filter + lve_id join.
+CREATE INDEX IF NOT EXISTS idx_lve_cvss_source_severity_lve
+    ON lve_cvss (source, severity, lve_id) WHERE severity IS NOT NULL;
+
+-- Child table lve_id joins for Hasura nested-object queries.
+CREATE INDEX IF NOT EXISTS idx_lve_descriptions_lve_id
+    ON lve_descriptions (lve_id);
+CREATE INDEX IF NOT EXISTS idx_lve_cwes_lve_id
+    ON lve_cwes (lve_id);
+
+-- ── Analytics views ───────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW lve_package_stats AS
+SELECT
+    p.source,
+    split_part(split_part(p.purl, ':', 2), '/', 1) AS ecosystem,
+    extract(year FROM c.published)::int             AS year,
+    count(DISTINCT c.cve_id)                        AS cve_count,
+    count(DISTINCT p.name)                          AS product_count
+FROM lve_packages p
+JOIN lve_cve c ON c.lve_id = p.lve_id
+WHERE c.published IS NOT NULL
+GROUP BY p.source, ecosystem, year;

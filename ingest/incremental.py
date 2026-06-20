@@ -29,7 +29,7 @@ State lives in a per-vendor JSON manifest {relpath: "size:mtime_ns"}. A file is
 mark()ed only after it imports cleanly, so a failed file retries next run.
 commit() writes the manifest atomically at the end.
 """
-import json
+from ingest import json_compat as json
 import os
 from pathlib import Path
 

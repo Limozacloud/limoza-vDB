@@ -1,6 +1,6 @@
 """Sync Rocky Linux errata: updateinfo.xml (bulk history) + Apollo API (recent tail)."""
 import gzip
-import json
+from ingest import json_compat as json
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone

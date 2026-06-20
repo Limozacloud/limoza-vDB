@@ -1,3 +1,4 @@
+orjson
 psycopg2-binary
 httpx
 python-debian

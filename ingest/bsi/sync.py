@@ -9,7 +9,7 @@ CSAF:   Downloads individual CSAF files from changes.csv, caching them
 """
 import csv
 import io
-import json
+from ingest import json_compat as json
 import time
 import urllib.request
 import urllib.error

@@ -1,5 +1,5 @@
 """Sync Debian Security Tracker JSON + DSA/DLA advisory lists."""
-import json
+from ingest import json_compat as json
 import subprocess
 import tempfile
 import time

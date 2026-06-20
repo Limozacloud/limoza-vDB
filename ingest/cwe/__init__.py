@@ -7,7 +7,7 @@ Builds an in-memory map CWE-id -> full weakness definition from
 * ``lookup_detail(cwe_id, dirs)`` -> full definition dict for the ``cwe`` table
 * ``ingest(conn, dirs)``          -> bulk-insert all CWEs into the ``cwe`` table
 """
-import json
+from ingest import json_compat as json
 from pathlib import Path
 
 _cache: dict[str, dict] | None = None

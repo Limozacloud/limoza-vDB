@@ -12,7 +12,7 @@ Free key: https://nvd.nist.gov/developers/request-an-api-key
 """
 from __future__ import annotations
 
-import json
+from ingest import json_compat as json
 import os
 import time
 from pathlib import Path

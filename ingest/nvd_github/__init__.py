@@ -20,7 +20,7 @@ from pathlib import Path
 from ingest.nvd.transform import parse, transform
 
 COMMIT_EVERY = 2_000
-N_WORKERS    = 8
+N_WORKERS    = mp.cpu_count()
 
 
 def _load_state(path: Path) -> dict:

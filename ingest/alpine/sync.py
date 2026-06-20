@@ -1,5 +1,5 @@
 """Sync Alpine Linux secdb from secdb.alpinelinux.org."""
-import json
+from ingest import json_compat as json
 import urllib.request
 from pathlib import Path
 
