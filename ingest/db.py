@@ -258,6 +258,7 @@ def ingest_files(
     total = skipped = errors = 0
     n = len(files)
     batch = RecordBatch()
+    batch_files: list = []
     with conn.cursor() as cur:
         for i, f in enumerate(files):
             f = Path(f)
@@ -267,8 +268,7 @@ def ingest_files(
                 if not records:
                     skipped += 1
                     cur.execute("RELEASE SAVEPOINT sp")
-                    if state:
-                        state.mark(f)
+                    batch_files.append(f)
                     continue
                 if isinstance(records, dict):
                     records = [records]
@@ -280,19 +280,37 @@ def ingest_files(
                     inserted += 1
                 total += inserted
                 cur.execute("RELEASE SAVEPOINT sp")
-                if state:
-                    state.mark(f)
+                batch_files.append(f)
             except Exception as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp")
                 errors += 1
                 if errors <= 5:
                     print(f"  Error {f.name}: {e}", flush=True)
             if not cve_filter and n > commit_every and (i + 1) % commit_every == 0:
-                batch.flush(cur)
-                conn.commit()
-                print(f"  {label}: {i+1:,}/{n:,}", flush=True)
-        batch.flush(cur)
-    conn.commit()
+                try:
+                    batch.flush(cur)
+                    conn.commit()
+                    if state:
+                        for bf in batch_files:
+                            state.mark(bf)
+                    print(f"  {label}: {i+1:,}/{n:,}", flush=True)
+                except Exception as e:
+                    conn.rollback()
+                    errors += 1
+                    batch._clear()
+                    print(f"  {label}: flush error at {i+1:,}: {e}", flush=True)
+                finally:
+                    batch_files = []
+        try:
+            batch.flush(cur)
+            conn.commit()
+            if state:
+                for bf in batch_files:
+                    state.mark(bf)
+        except Exception as e:
+            conn.rollback()
+            errors += 1
+            print(f"  {label}: final flush error: {e}", flush=True)
     if state and not cve_filter:
         state.commit()
     return total, skipped, errors
