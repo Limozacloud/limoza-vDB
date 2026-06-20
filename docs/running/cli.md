@@ -1,11 +1,10 @@
 # Ingest CLI
 
-All operations run through the `ingest` container. Because it sits behind a Compose
-profile, you invoke it one command at a time with `docker compose run --rm ingest …`
-(`--rm` removes the throwaway container afterwards):
+All operations run through the `ingest` container, which runs continuously as an idle
+service. Use `docker compose exec ingest …` to run commands inside it:
 
 ```bash
-docker compose run --rm ingest <command> [args]
+docker compose exec ingest <command> [args]
 ```
 
 Running `ingest` with no command prints the built-in help.
@@ -29,9 +28,9 @@ Downloads raw source data into the local `/data/<source>` volumes. Must run befo
 `import`. Each source has its own target; `sync all` fetches everything.
 
 ```bash
-docker compose run --rm ingest sync redhat
-docker compose run --rm ingest sync nvd epss cisa_kev      # several at once
-docker compose run --rm ingest sync all
+docker compose exec ingest sync redhat
+docker compose exec ingest sync nvd epss cisa_kev      # several at once
+docker compose exec ingest sync all
 ```
 
 Sources support incremental sync where the upstream allows it (checkpoints / change
@@ -45,9 +44,9 @@ Reads the synced data and writes it into the unified **LVE record** (tables `lve
 that the matching `sync` has been done and skips with a hint if not.
 
 ```bash
-docker compose run --rm ingest import redhat
-docker compose run --rm ingest import nvd redhat suse ubuntu
-docker compose run --rm ingest import all
+docker compose exec ingest import redhat
+docker compose exec ingest import nvd redhat suse ubuntu
+docker compose exec ingest import all
 ```
 
 Import order does **not** matter — the schema is order-independent, and only NVD writes
@@ -58,25 +57,18 @@ overwrites another's non-null data.
 testing a mapping:
 
 ```bash
-docker compose run --rm ingest import nvd redhat suse --cve CVE-2024-3094
+docker compose exec ingest import nvd redhat suse --cve CVE-2024-3094
 ```
 
 ## pipeline
 
 Runs a `sync` followed by an `import` for a job defined in `config/schedule.json`.
-Two jobs ship by default:
-
-| Job | Contents |
-|-----|----------|
-| `daily` | NVD, the distro sources, Microsoft, and the scoring sources (EPSS/KEV/SSVC/BSI/Nuclei) |
-| `weekly` | The heavier exploit-intel / ecosystem sources (Exploit-DB, Metasploit, PoC-in-GitHub, GHSA, OSV) |
 
 ```bash
-docker compose run --rm ingest pipeline daily
-docker compose run --rm ingest pipeline weekly
+docker compose exec ingest pipeline daily
 ```
 
-The `ofelia` service runs these automatically on a cron schedule (`config/ofelia.ini`).
+The `ofelia` service runs this automatically at 02:30 every night (`config/ofelia.ini`).
 
 ## schema
 
@@ -85,7 +77,7 @@ applies the schema automatically, so you only need this to apply schema changes 
 importing data.
 
 ```bash
-docker compose run --rm ingest schema
+docker compose exec ingest schema
 ```
 
 ## hasura-init
@@ -95,7 +87,7 @@ array relationships between `lve` and its child tables, and grants the `readonly
 SELECT access. See [GraphQL & Hasura](graphql.md).
 
 ```bash
-docker compose run --rm ingest hasura-init
+docker compose exec ingest hasura-init
 ```
 
 ## create-token
@@ -104,8 +96,8 @@ Mints a read-only JWT for the GraphQL API (default TTL 1 day). Requires
 `HASURA_JWT_SECRET` in `.env`.
 
 ```bash
-docker compose run --rm ingest create-token            # 1-day token
-docker compose run --rm ingest create-token --ttl 90   # 90-day token
+docker compose exec ingest create-token            # 1-day token
+docker compose exec ingest create-token --ttl 90   # 90-day token
 ```
 
 See [GraphQL & Hasura → tokens](graphql.md#read-only-tokens).
@@ -116,8 +108,8 @@ Empties data tables. Truncating **all** tables requires `--yes`; naming specific
 does not.
 
 ```bash
-docker compose run --rm ingest truncate lve_packages    # one table
-docker compose run --rm ingest truncate --yes           # everything
+docker compose exec ingest truncate lve_packages    # one table
+docker compose exec ingest truncate --yes           # everything
 ```
 
 ## verify
@@ -126,14 +118,15 @@ Fetches a CVE from upstream OSV and compares it against what the database holds 
 quick sanity check for coverage gaps.
 
 ```bash
-docker compose run --rm ingest verify CVE-2024-3094
+docker compose exec ingest verify CVE-2024-3094
 ```
 
 ## Running ad-hoc Python
 
 The container's entrypoint intercepts commands, so to run a raw Python one-liner (for
-inspecting downloaded source files) override the entrypoint:
+inspecting downloaded source files) use `docker compose exec` with the `-it` flag and
+call Python directly:
 
 ```bash
-docker compose run --rm --entrypoint python3 ingest -c "import json, glob; print(len(glob.glob('/data/redhat/**/*.json', recursive=True)))"
+docker compose exec ingest python3 -c "import json, glob; print(len(glob.glob('/data/redhat/**/*.json', recursive=True)))"
 ```

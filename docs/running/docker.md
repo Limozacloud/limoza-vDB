@@ -29,10 +29,9 @@ The examples below use the default file name; if you skip the copy, pass
 | `pgadmin` | `dpage/pgadmin4` | Database UI (development convenience) | `5050` |
 | `ofelia` | `mcuadros/ofelia` | Cron scheduler that runs the sync/import pipelines | — |
 
-The `ingest` service is **not** a long-running daemon — it sits behind a Compose
-[profile](https://docs.docker.com/compose/profiles/) (`profiles: [ingest]`) so it never
-starts with `docker compose up`. You invoke it on demand with `docker compose run`
-(see [Ingest CLI](cli.md)).
+The `ingest` service runs continuously as an idle process (`sleep infinity`) so that
+`docker compose exec` and the `ofelia` scheduler can run commands inside it without
+creating throwaway containers. It consumes no CPU and ~1 MB RAM while idle.
 
 ## Data persistence
 
@@ -56,18 +55,18 @@ cp .env.template .env
 # Generate a JWT signing key for read-only API tokens:
 echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 
-# 3. Start the long-running services
-docker compose up -d postgres hasura
+# 3. Start the stack
+docker compose up -d postgres hasura ingest
 
 # 4. Apply the database schema (idempotent)
-docker compose run --rm ingest schema
+docker compose exec ingest schema
 
 # 5. Download and import data (start small, or use `all`)
-docker compose run --rm ingest sync redhat
-docker compose run --rm ingest import redhat
+docker compose exec ingest sync redhat
+docker compose exec ingest import redhat
 
 # 6. Wire up the GraphQL API (once)
-docker compose run --rm ingest hasura-init
+docker compose exec ingest hasura-init
 ```
 
 After this, the GraphQL endpoint is at `http://localhost:8080/v1/graphql` and the
