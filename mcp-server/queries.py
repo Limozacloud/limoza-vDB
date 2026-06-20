@@ -4,13 +4,12 @@ docs/graphql-example-queries.md so the API surface stays the single source of tr
 
 # Full single-CVE scan: every field for one CVE across all sources.
 FULL_CVE_SCAN = """
-query FullCVEScan($cve_id: String!) {
-  lve_cve(where: { cve_id: { _eq: $cve_id } }) {
-    lve_id
+query CVEDetails($cve_id: String!) {
+  lve_cve(where: {cve_id: {_eq: $cve_id}}) {
     cve_id
-    status
     published
     updated
+    status
     epss_score
     epss_percentile
     epss_date
@@ -22,15 +21,16 @@ query FullCVEScan($cve_id: String!) {
     ssvc_automatable
     ssvc_technical_impact
     lve {
+      lve_id
       aliases
       has_exploit
-      ingested_at
       titles { value source advisory_ref }
       descriptions { value source advisory_ref }
-      cvss { version score vector severity source product_id }
+      cvss { source version vector score severity advisory_ref }
       cwes {
-        cwe_id name source
+        cwe_id
         cwe {
+          name
           abstraction
           description
           extended_description
@@ -45,15 +45,17 @@ query FullCVEScan($cve_id: String!) {
       }
       references { url type source }
       advisories { advisory_id source url published updated vendor_data }
-      upstream { upstream_id purl fix_version fix_commit ranges versions source }
       packages {
-        name purl affected_state remediation_state status_raw
-        vex_justification ranges severity source advisory_ref vendor_data
+        name purl source
+        affected_state remediation_state
+        status_raw vex_justification
+        ranges advisory_ref vendor_data
       }
-      mitigations { source advisory_ref value purls }
-      impacts { source advisory_ref value }
       exploits { source source_id name url metadata }
-      history(order_by: { date: asc }) { date event source detail }
+      upstream { upstream_id purl fix_version fix_commit versions ranges source advisory_ref }
+      mitigations { value source advisory_ref }
+      impacts { value source advisory_ref }
+      history(order_by: {date: asc}) { date event source detail }
     }
   }
 }

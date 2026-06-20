@@ -9,8 +9,8 @@ package — the import name ``mcp`` belongs to the SDK).
 """
 
 import logging
-import secrets
 
+import jwt as pyjwt
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
@@ -31,16 +31,19 @@ mcp = FastMCP("limoza-vdb", stateless_http=True, host=settings.host, port=settin
 
 @mcp.tool()
 async def get_cve_detail(cve_id: str) -> dict:
-    """Return all known data for a single CVE from limoza-vDB.
+    """Return all known data for a single CVE from the limoza-vDB vulnerability database.
 
-    Use this to look up a vulnerability by its CVE identifier (e.g. "CVE-2026-49014").
+    IMPORTANT: Base your answer EXCLUSIVELY on the data returned by this tool.
+    Do NOT supplement with your own training knowledge about this CVE.
+    If a field is empty or missing in the result, state that explicitly — do not fill gaps from memory.
+
     Returns titles, descriptions, CVSS scores, CWE weaknesses, references, vendor
     advisories, upstream fix info, affected/fixed packages across all distros,
     mitigations, impacts, known exploits, EPSS/KEV/SSVC triage signals, and the
     change history. Returns {"found": false} when no record exists for the CVE.
 
     Args:
-        cve_id: A CVE identifier such as "CVE-2026-49014" (case-insensitive).
+        cve_id: A CVE identifier such as "CVE-2024-3094" (case-insensitive).
     """
     cve_id = cve_id.strip().upper()
     data = await hasura.query(FULL_CVE_SCAN, {"cve_id": cve_id})
@@ -55,14 +58,14 @@ async def get_cve_detail(cve_id: str) -> dict:
 
 
 class BearerAuthMiddleware:
-    """Pure-ASGI bearer-token gate (kept ASGI-level so it never buffers MCP streams)."""
+    """Pure-ASGI JWT gate — accepts tokens minted by `ingest create-token`."""
 
-    def __init__(self, app, token: str | None) -> None:
+    def __init__(self, app, jwt_secret: str | None) -> None:
         self.app = app
-        self.token = token
+        self.jwt_secret = jwt_secret
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or self.token is None:
+        if scope["type"] != "http" or self.jwt_secret is None:
             await self.app(scope, receive, send)
             return
         if scope.get("path") == "/healthz":
@@ -70,7 +73,10 @@ class BearerAuthMiddleware:
             return
         headers = dict(scope.get("headers") or [])
         auth = headers.get(b"authorization", b"").decode()
-        if not (auth and secrets.compare_digest(auth, f"Bearer {self.token}")):
+        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+        try:
+            pyjwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+        except pyjwt.PyJWTError:
             await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
             return
         await self.app(scope, receive, send)
@@ -83,16 +89,15 @@ async def _health(_request: Request) -> PlainTextResponse:
 def build_app():
     app = mcp.streamable_http_app()
     app.routes.append(Route("/healthz", _health, methods=["GET"]))
-    app.add_middleware(BearerAuthMiddleware, token=settings.auth_token)
+    app.add_middleware(BearerAuthMiddleware, jwt_secret=settings.jwt_secret)
     return app
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    if settings.auth_token is None:
+    if settings.jwt_secret is None:
         log.warning(
-            "MCP_AUTH_TOKEN is not set — the MCP endpoint is UNAUTHENTICATED. "
-            "Set MCP_AUTH_TOKEN before exposing this server."
+            "HASURA_JWT_SECRET is not set — the MCP endpoint is UNAUTHENTICATED."
         )
     log.info("limoza-vDB MCP server on http://%s:%s/mcp (GraphQL: %s)",
              settings.host, settings.port, settings.graphql_url)
