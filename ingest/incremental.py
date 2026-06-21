@@ -1,39 +1,50 @@
 """Central incremental-import tracking.
 
-Most importers iterate a set of files and upsert every record on every run. This
-helper lets an importer re-process only the files that changed since the last
-successful import.
+Pick a detector per sync technology:
 
-Detectors (pick per sync technology — see the per-vendor table in the docs):
+  * Gate (full-dataset feeds: cpe, epss, osv)
+        Sources that rewrite their whole dataset each run gain nothing from
+        per-file/per-record diffing. Gate the WHOLE run on the source's own
+        change-marker (feed lastModified, ETag, checkpoint) — skip if unchanged.
 
-  * size+mtime (ImportState, the default)
-        stat() only, no file read. Correct for every sync that writes ONLY the
-        files it changed: changes.csv-based RedHat/SUSE, per-file caches,
-        "skip if exists" downloads. Measured: SUSE 1,415 changed of 148,692.
+  * ImportState (size+mtime, the default for file-per-record sources)
+        stat() only, no read. Correct when sync writes ONLY the files it changed
+        (changes.csv-based RedHat/SUSE, per-file caches, skip-if-exists).
+        A file is mark()ed only after it imports cleanly, so failures retry.
 
-  * git diff (git_changed_paths)
-        For git-pull sources, where a checkout/sparse-update can touch more files
-        than actually changed. The exact changeset between the pre-pull HEAD and
-        the new HEAD. Sharper than mtime there (Ubuntu: git touched 18% of files).
+  * git_changed_paths (git-pull sources)
+        Exact changeset between the pre-pull HEAD and the new HEAD — sharper than
+        mtime, since a sparse checkout can touch more files than really changed.
 
-  * source-provided hashes
-        When the source already ships a per-record hash (e.g. the nvd-github
-        mirror's _state.csv sha256) — diff that map directly, no stat/read.
-
-  * gate (not here — trivial per vendor)
-        Sources that rewrite their whole dataset each sync (epss, cpe, osv) gain
-        nothing from file mtime. Skip the whole import when the source's own
-        checkpoint/ETag says nothing changed.
-
-State lives in a per-vendor JSON manifest {relpath: "size:mtime_ns"}. A file is
-mark()ed only after it imports cleanly, so a failed file retries next run.
-commit() writes the manifest atomically at the end.
+State lives in a small JSON manifest next to the source data.
 """
-from ingest import json_compat as json
+import json
 import os
 from pathlib import Path
 
 
+# ── Gate: whole-run skip for full-dataset feeds ────────────────────────────────
+class Gate:
+    """Skip an entire sync when the source's change-marker is unchanged."""
+
+    def __init__(self, state_path):
+        self.state_path = Path(state_path)
+
+    def _stored(self):
+        try:
+            return json.loads(self.state_path.read_text()).get("marker")
+        except (ValueError, OSError):
+            return None
+
+    def unchanged(self, marker) -> bool:
+        return bool(marker) and self._stored() == marker
+
+    def commit(self, marker) -> None:
+        if marker:
+            self.state_path.write_text(json.dumps({"marker": marker}))
+
+
+# ── ImportState: per-file size+mtime manifest ──────────────────────────────────
 def _sig(path: Path) -> str:
     st = path.stat()
     return f"{st.st_size}:{st.st_mtime_ns}"
@@ -57,7 +68,6 @@ class ImportState:
         return Path(path).relative_to(self.base).as_posix()
 
     def changed(self, files, *, full: bool = False) -> list:
-        """Files whose size/mtime differs from the manifest (or all, if full)."""
         if full:
             return list(files)
         out = []
@@ -70,14 +80,12 @@ class ImportState:
         return out
 
     def mark(self, path) -> None:
-        """Record a cleanly-imported file; its manifest entry advances on commit()."""
         try:
             self._marked[self._key(path)] = _sig(path)
         except OSError:
             pass
 
     def commit(self) -> None:
-        """Merge this run's marks into the stored manifest and write it atomically."""
         self._stored.update(self._marked)
         tmp = self.state_path.with_name(self.state_path.name + ".tmp")
         tmp.write_text(json.dumps(self._stored, separators=(",", ":")), encoding="utf-8")
@@ -85,13 +93,8 @@ class ImportState:
         self._marked.clear()
 
 
+# ── git_changed_paths: exact changeset for git-pull sources ────────────────────
 def git_changed_paths(repo_dir, since_ref, *, pathspec=None) -> set:
-    """Paths changed in `repo_dir` between `since_ref` and HEAD (git-pull sources).
-
-    Returns paths relative to the repo (empty set = no changes). The caller
-    records the pre-pull HEAD (`git rev-parse HEAD`) before pulling, then passes
-    it here after the pull.
-    """
     import subprocess
     cmd = ["git", "-C", str(repo_dir), "diff", "--name-only", f"{since_ref}..HEAD"]
     if pathspec:

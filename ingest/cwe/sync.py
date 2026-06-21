@@ -1,29 +1,18 @@
-"""Sync CWE definitions from CWE-CAPEC/REST-API-wg (json_repo/W/ only)."""
-import subprocess
+"""Sync CWE weakness definitions from CWE-CAPEC/REST-API-wg (json_repo/W only)."""
 from pathlib import Path
 
-_REPO        = "https://github.com/CWE-CAPEC/REST-API-wg"
-_SPARSE_DIRS = ["json_repo/W"]
+from ingest.gitsync import clone_or_pull
+
+_REPO   = "https://github.com/CWE-CAPEC/REST-API-wg"
+_SPARSE = ["json_repo/W"]
 
 
-def sync(dirs: dict) -> None:
-    dest = Path(dirs["cwe_db"])
-    dest.mkdir(parents=True, exist_ok=True)
+def run(dirs: dict) -> int:
+    dest = Path(dirs["cwe"])
+    print("── sync cwe ──")
+    clone_or_pull(_REPO, dest, sparse=_SPARSE)
 
-    if (dest / ".git").exists():
-        print("  CWE: updating...")
-        subprocess.run(["git", "-C", str(dest), "sparse-checkout", "set"] + _SPARSE_DIRS, check=True)
-        subprocess.run(["git", "-C", str(dest), "pull", "--ff-only"], check=True)
-    else:
-        print("  CWE: cloning CWE-CAPEC/REST-API-wg (sparse)...")
-        subprocess.run([
-            "git", "clone", "--depth=1", "--filter=blob:none", "--sparse",
-            _REPO, str(dest),
-        ], check=True)
-        subprocess.run(
-            ["git", "-C", str(dest), "sparse-checkout", "set"] + _SPARSE_DIRS,
-            check=True,
-        )
-
-    count = sum(1 for _ in (dest / "json_repo" / "W").glob("*.json")) if (dest / "json_repo" / "W").exists() else 0
-    print(f"  CWE: {count} weakness definitions")
+    w = dest / "json_repo" / "W"
+    count = sum(1 for _ in w.glob("*.json")) if w.exists() else 0
+    print(f"  done: {count:,} weakness definitions → {w}")
+    return count
