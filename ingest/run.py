@@ -27,6 +27,7 @@ SOURCES = {
     "cna":        ("ingest.reference.cna",       "cna",  None),
     "cpe":        ("ingest.reference.cpe",       "cpe",  None),
     "cwe":        ("ingest.reference.cwe",       "cwe",  None),
+    "cvelistv5":  ("ingest.records.cvelistv5",   "cve_record", None),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
     "metasploit": ("ingest.exploits.metasploit", "exploits", "metasploit"),
     "nuclei":     ("ingest.exploits.nuclei",     "exploits", "nuclei"),
@@ -36,6 +37,7 @@ SOURCES = {
 GROUPS = {
     "reference": ["cna", "cpe", "cwe"],
     "scoring":   ["epss", "kev", "ssvc"],
+    "records":   ["cvelistv5"],
     "exploits":  ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 

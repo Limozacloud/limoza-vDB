@@ -1,0 +1,11 @@
+target-version = "py312"
+line-length = 120
+
+# Dev-only helper scripts use intentionally terse one-liners; lint the package only.
+exclude = [".venv", "tools", "scripts"]
+
+[lint]
+select = ["E", "F", "W"]
+# Stylistic rules that conflict with the existing aligned-import / compact style.
+# F (pyflakes) and logic-level E/W checks stay enabled — these catch real bugs.
+ignore = ["E402", "E701", "E741", "E501", "E401"]

@@ -9,6 +9,140 @@
 --   2. standalone dictionaries (own key):    cna, cpe, cwe
 -- ════════════════════════════════════════════════════════════════════════════
 
+-- ── ADP dictionary ────────────────────────────────────────────────────────────
+-- Authorized Data Publishers (CISA-ADP, the CVE Program container, …). Unlike
+-- CNAs these aren't in the partner list, but every adp container carries a
+-- providerMetadata {orgId, shortName, dateUpdated}. Collected as a byproduct of
+-- the cvelistv5 scan (distinct by orgId UUID). cve_* source fields reference this
+-- by UUID for ADP-authored rows (logical ref, no FK).
+CREATE TABLE IF NOT EXISTS adp (
+    uuid         TEXT PRIMARY KEY,     -- providerMetadata.orgId
+    short_name   TEXT,
+    last_updated TIMESTAMPTZ,          -- newest providerMetadata.dateUpdated seen
+    first_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_adp_short_name ON adp (short_name);
+
+-- ── CVE spine ─────────────────────────────────────────────────────────────────
+-- Thin, shared registry of every known CVE id. Created by ANY source that
+-- mentions a CVE (`ON CONFLICT DO NOTHING`) — nobody owns it. No foreign keys:
+-- cve_id is the only join key, so the CHECK enforces the canonical form
+-- (importers also pass ids through core.cveid.normalize at the boundary).
+-- A cve row with no cve_record = "known to someone, not yet in the CVE List".
+CREATE TABLE IF NOT EXISTS cve (
+    cve_id     TEXT PRIMARY KEY CHECK (cve_id ~ '^CVE-[0-9]{4}-[0-9]+$'),
+    first_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── CVE record (cvelistV5, 1 row / CVE) ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cve_record (
+    cve_id         TEXT PRIMARY KEY,
+    state          TEXT,                 -- PUBLISHED | REJECTED | RESERVED
+    assigner       TEXT,                 -- CNA short name (→ cna.short_name)
+    date_reserved  TIMESTAMPTZ,
+    date_published TIMESTAMPTZ,
+    date_updated   TIMESTAMPTZ,
+    title          TEXT,
+    exploit_note   TEXT,                 -- CNA prose ("Exploitable with…" / "not aware of…")
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cve_record_assigner ON cve_record (assigner);
+CREATE INDEX IF NOT EXISTS idx_cve_record_published ON cve_record (date_published DESC NULLS LAST);
+
+-- ── CVE info (N / CVE, multi-source) ──────────────────────────────────────────
+-- origin = the importer that wrote the row (delete-scope on re-import);
+-- source = who authored the data (cna | <adp shortname> | nvd | …) for display.
+CREATE TABLE IF NOT EXISTS cve_cvss (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id     TEXT NOT NULL,
+    origin     TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    version    TEXT,                     -- 2.0 | 3.0 | 3.1 | 4.0
+    base_score DOUBLE PRECISION,
+    severity   TEXT,
+    vector     TEXT,
+    UNIQUE (cve_id, source, vector)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_cvss_cve ON cve_cvss (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_cwe (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    cwe_id  TEXT NOT NULL,               -- CWE-79
+    UNIQUE (cve_id, source, cwe_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_cwe_cve ON cve_cwe (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_desc (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_desc_cve ON cve_desc (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_ref (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    url     TEXT NOT NULL,
+    type    TEXT,
+    UNIQUE (cve_id, source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_ref_cve ON cve_ref (cve_id);
+
+-- remediation / mitigation prose (same shape as cve_desc; separate tables per
+-- concept so other sources — vendors, distros — slot in via their `source`).
+CREATE TABLE IF NOT EXISTS cve_solution (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_solution_cve ON cve_solution (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_workaround (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_workaround_cve ON cve_workaround (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_impact (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id      TEXT NOT NULL,
+    origin      TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    capec_id    TEXT,                    -- CAPEC-592
+    description TEXT,
+    UNIQUE (cve_id, source, capec_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_impact_cve ON cve_impact (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_alias (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    alias   TEXT NOT NULL,              -- GHSA-xxx, JVNDB-…, etc.
+    UNIQUE (cve_id, alias)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_alias_cve   ON cve_alias (cve_id);
+CREATE INDEX IF NOT EXISTS idx_cve_alias_alias ON cve_alias (alias);
+
 -- ── Sync log ──────────────────────────────────────────────────────────────────
 -- One row per sync/ingest run per source. Powers the dashboard's freshness
 -- ("last successful X") and error views. Written by ingest/run.py around every
@@ -94,9 +228,14 @@ CREATE TABLE IF NOT EXISTS cna (
     organization_name TEXT,
     scope             TEXT,
     advisory_url      TEXT,
+    aliases           TEXT[],            -- record-shortName variants → this CNA (from cna_mapping.json)
+    uuids             TEXT[],            -- all providerMetadata.orgIds seen (from corpus) → cve_* source join
     active            BOOLEAN NOT NULL DEFAULT TRUE,
     synced_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_cna_cna_id  ON cna (cna_id);
+CREATE INDEX IF NOT EXISTS idx_cna_uuids   ON cna USING GIN (uuids);
+CREATE INDEX IF NOT EXISTS idx_cna_aliases ON cna USING GIN (aliases);
 
 -- ── CPE dictionary ────────────────────────────────────────────────────────────
 -- NVD CPE 2.3 dictionary (~1.7M entries). Pattern: UPSERT — entries are
