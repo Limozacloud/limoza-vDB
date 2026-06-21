@@ -14,7 +14,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from ingest.retry import retry
+from ingest.core.retry import retry
 
 _ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 

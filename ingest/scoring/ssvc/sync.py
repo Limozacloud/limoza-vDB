@@ -6,8 +6,8 @@ ssvc_index.json ({cve: {exploitation, automatable, technical_impact}}).
 import json
 from pathlib import Path
 
-from ingest.gitsync import clone_or_pull, head
-from ingest.incremental import Gate
+from ingest.core.gitsync import clone_or_pull, head
+from ingest.core.incremental import Gate
 
 _REPO = "https://github.com/cisagov/vulnrichment"
 

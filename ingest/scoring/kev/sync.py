@@ -1,7 +1,7 @@
 """Fetch the CISA KEV catalog (cisagov/kev-data) via shallow git clone/pull."""
 from pathlib import Path
 
-from ingest.gitsync import clone_or_pull
+from ingest.core.gitsync import clone_or_pull
 
 _REPO = "https://github.com/cisagov/kev-data"
 

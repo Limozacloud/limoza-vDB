@@ -3,7 +3,7 @@ import json
 import time
 from pathlib import Path
 
-from ingest.retry import http_get
+from ingest.core.retry import http_get
 
 _URL   = "https://api.first.org/data/v1/epss"
 _LIMIT = 10_000

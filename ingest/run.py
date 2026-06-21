@@ -21,12 +21,12 @@ import sys
 #   table        = the DB table the ingest writes to
 #   source_value = filters the row count to this source (shared tables); None = whole table
 SOURCES = {
-    "epss":       ("ingest.epss",                "epss", None),
-    "kev":        ("ingest.kev",                 "kev",  None),
-    "ssvc":       ("ingest.ssvc",                "ssvc", None),
-    "cna":        ("ingest.cna",                 "cna",  None),
-    "cpe":        ("ingest.cpe",                 "cpe",  None),
-    "cwe":        ("ingest.cwe",                 "cwe",  None),
+    "epss":       ("ingest.scoring.epss",        "epss", None),
+    "kev":        ("ingest.scoring.kev",         "kev",  None),
+    "ssvc":       ("ingest.scoring.ssvc",        "ssvc", None),
+    "cna":        ("ingest.reference.cna",       "cna",  None),
+    "cpe":        ("ingest.reference.cpe",       "cpe",  None),
+    "cwe":        ("ingest.reference.cwe",       "cwe",  None),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
     "metasploit": ("ingest.exploits.metasploit", "exploits", "metasploit"),
     "nuclei":     ("ingest.exploits.nuclei",     "exploits", "nuclei"),
@@ -34,7 +34,9 @@ SOURCES = {
 }
 
 GROUPS = {
-    "exploits": ["exploitdb", "metasploit", "nuclei", "poc_github"],
+    "reference": ["cna", "cpe", "cwe"],
+    "scoring":   ["epss", "kev", "ssvc"],
+    "exploits":  ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 
 
@@ -58,7 +60,7 @@ def main(argv: list[str]) -> int:
     cmd, raw_targets = argv[0], (argv[1:] or list(SOURCES))
 
     if cmd == "schema":
-        from ingest.db import apply_schema
+        from ingest.core.db import apply_schema
         apply_schema()
         return 0
 
@@ -72,7 +74,7 @@ def main(argv: list[str]) -> int:
         print(f"unknown target(s): {', '.join(unknown)}")
         return 1
 
-    from ingest.db import get_conn, log_run, table_count
+    from ingest.core.db import get_conn, log_run, table_count
 
     dirs = _dirs()
     conn = get_conn()

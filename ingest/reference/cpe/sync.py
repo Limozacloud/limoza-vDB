@@ -17,8 +17,8 @@ from pathlib import Path
 
 import httpx
 
-from ingest.incremental import Gate
-from ingest.retry import http_get
+from ingest.core.incremental import Gate
+from ingest.core.retry import http_get
 
 _FEED = "https://nvd.nist.gov/feeds/json/cpe/2.0/nvdcpe-2.0.zip"
 _META = "https://nvd.nist.gov/feeds/json/cpe/2.0/nvdcpe-2.0.meta"

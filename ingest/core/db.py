@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 import psycopg2
 
-_SCHEMA = Path(__file__).parent.parent / "schema.sql"
+# ingest/core/db.py → repo root is three levels up
+_SCHEMA = Path(__file__).resolve().parents[2] / "schema.sql"
 
 
 def get_conn():

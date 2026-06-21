@@ -1,7 +1,7 @@
 """Sync CWE weakness definitions from CWE-CAPEC/REST-API-wg (json_repo/W only)."""
 from pathlib import Path
 
-from ingest.gitsync import clone_or_pull
+from ingest.core.gitsync import clone_or_pull
 
 _REPO   = "https://github.com/CWE-CAPEC/REST-API-wg"
 _SPARSE = ["json_repo/W"]

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from ingest.retry import http_get
+from ingest.core.retry import http_get
 
 _URL = "https://raw.githubusercontent.com/CVEProject/cve-website/dev/src/assets/data/CNAsList.json"
 
