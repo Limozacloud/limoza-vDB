@@ -1,0 +1,10 @@
+{
+  "_comment": "Manual overrides for cna.advisory_patterns, keyed by cna_id. Replaces the auto-derived list for that CNA. Each: [{\"pattern\": \"<host or host/path>\", \"template\": \"<url with {CVE} or {cve}>\" | null}]",
+  "CNA-2018-0013": [
+    { "pattern": "jira.mongodb.org/browse/SERVER", "template": null }
+  ],
+  "CNA-2016-0019": [
+    { "pattern": "openssl-library.org", "template": null }
+  ],
+  "CNA-2019-0009": []
+}

@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS cna (
     advisory_url      TEXT,
     aliases           TEXT[],            -- record-shortName variants → this CNA (from cna_mapping.json)
     uuids             TEXT[],            -- all providerMetadata.orgIds seen (from corpus) → cve_* source join
+    advisory_patterns JSONB,             -- [{pattern,template}] → L2 upstream-advisory match/construct (derived + override)
     active            BOOLEAN NOT NULL DEFAULT TRUE,
     synced_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -334,3 +335,53 @@ CREATE TABLE IF NOT EXISTS exploits (
 
 CREATE INDEX IF NOT EXISTS idx_exploits_cve    ON exploits (cve_id);
 CREATE INDEX IF NOT EXISTS idx_exploits_source ON exploits (source);
+
+-- ── L1–L3 advisory tiering (dashboard) ────────────────────────────────────────
+-- cve_levels(cve) returns the tiered advisory view for one CVE:
+--   L1 CNA        = assigner (cve_record → cna)
+--   L2 Upstream   = dedicated-CNA product advisory (cna.advisory_patterns vs cve_ref)
+--                   · ecosystem GHSA (imported)  · GHSA-ref fallback (unreviewed)
+--   L3 Downstream = formal advisories (distros + ecosystem-natives)  · distro tracking (cve_vendor.cve_url)
+-- cve_level is just the SETOF return shape (tracked in Hasura → GraphQL: cve_levels(args:{p_cve})).
+--   tracked_only = true → distro only assessed it (cve_vendor), no formal bulletin.
+CREATE TABLE IF NOT EXISTS cve_level (
+    cve_id text, lvl text, source text, url text, tracked_only boolean
+);
+
+CREATE OR REPLACE FUNCTION cve_levels(p_cve text)
+RETURNS SETOF cve_level
+LANGUAGE sql STABLE AS $fn$
+  SELECT rec.cve_id, 'L1 CNA', c.short_name, c.advisory_url, false
+  FROM cve_record rec JOIN cna c ON c.cna_id = rec.assigner
+  WHERE rec.cve_id = p_cve
+  UNION
+  SELECT rec.cve_id, 'L2 Upstream', c.short_name, r.url, false
+  FROM cve_record rec JOIN cna c ON c.cna_id = rec.assigner
+  JOIN LATERAL jsonb_array_elements(COALESCE(c.advisory_patterns,'[]'::jsonb)) p ON true
+  JOIN cve_ref r ON r.cve_id = rec.cve_id AND r.origin='cvelistv5'
+                AND r.url LIKE '%'||(p->>'pattern')||'%'
+  WHERE rec.cve_id = p_cve
+  UNION
+  SELECT p_cve, 'L2 Upstream',
+     COALESCE((SELECT split_part(p2->>'purl','/',2) FROM cve_vendor v2,
+               jsonb_array_elements(v2.data->'packages') p2
+               WHERE v2.cve_id=p_cve AND v2.source='ghsa' LIMIT 1), 'ghsa'),
+     a.url, false
+  FROM advisory_cve ac JOIN advisory a USING (source, advisory_id)
+  WHERE ac.cve_id = p_cve AND a.source='ghsa'
+  UNION
+  SELECT p_cve, 'L2 Upstream', split_part(r.url,'/',4)||'/'||split_part(r.url,'/',5), r.url, false
+  FROM cve_ref r
+  WHERE r.cve_id = p_cve AND r.origin='cvelistv5'
+    AND r.url LIKE '%github.com/%/security/advisories/GHSA-%'
+    AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source='ghsa')
+  UNION
+  SELECT p_cve, 'L3 Downstream', a.source, a.url, false
+  FROM advisory_cve ac JOIN advisory a USING (source, advisory_id)
+  WHERE ac.cve_id = p_cve AND a.source <> 'ghsa'
+  UNION
+  SELECT p_cve, 'L3 Downstream', v.source, v.data->>'cve_url', true
+  FROM cve_vendor v
+  WHERE v.cve_id = p_cve AND v.data ? 'cve_url'
+    AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
+$fn$;
