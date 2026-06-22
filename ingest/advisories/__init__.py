@@ -26,10 +26,8 @@ _SOURCE_URLS = {k: v for k, v in
 
 
 def vendor_row(source: str, cve: str, data: dict) -> tuple:
-    """Build a cve_vendor row, stamping the source's per-CVE page url (cve_url template)."""
-    tmpl = (_SOURCE_URLS.get(source) or {}).get("cve_url")
-    if tmpl:
-        data = {**data, "cve_url": tmpl.replace("{cve}", cve)}
+    """Build a cve_vendor row. cve_url is NOT stamped here anymore — it's derived at
+    query time (cve_levels JOIN source_url); cve_vendor.data stays pure assessment."""
     return (cve, source, Json(data))
 
 

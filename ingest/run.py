@@ -27,6 +27,7 @@ SOURCES = {
     "cna":        ("ingest.reference.cna",       "cna",  None),
     "cpe":        ("ingest.reference.cpe",       "cpe",  None),
     "cwe":        ("ingest.reference.cwe",       "cwe",  None),
+    "source_urls":("ingest.reference.source_urls","source_url", None),
     "cvelistv5":  ("ingest.records.cvelistv5",   "cve_record", None),
     "redhat":     ("ingest.advisories.redhat",   "advisory", "redhat"),
     "suse":       ("ingest.advisories.suse",     "advisory", "suse"),
@@ -45,7 +46,7 @@ SOURCES = {
 }
 
 GROUPS = {
-    "reference":  ["cna", "cpe", "cwe"],
+    "reference":  ["cna", "cpe", "cwe", "source_urls"],
     "scoring":    ["epss", "kev", "ssvc"],
     "records":    ["cvelistv5"],
     "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft", "ghsa", "osv"],

@@ -336,6 +336,17 @@ CREATE TABLE IF NOT EXISTS exploits (
 CREATE INDEX IF NOT EXISTS idx_exploits_cve    ON exploits (cve_id);
 CREATE INDEX IF NOT EXISTS idx_exploits_source ON exploits (source);
 
+-- ── Per-source URL templates (SQL-accessible mirror of source_urls.json) ──────
+-- Seeded by `vdb ingest source_urls` from ingest/advisories/source_urls.json (the
+-- editable single source of truth). cve_levels() JOINs this so the function needs
+-- no hardcoded URLs. {cve} placeholder.
+CREATE TABLE IF NOT EXISTS source_url (
+    source         TEXT PRIMARY KEY,
+    cve_url        TEXT,
+    advisory_url   TEXT,
+    when_id_prefix TEXT
+);
+
 -- ── L1–L3 advisory tiering (dashboard) ────────────────────────────────────────
 -- cve_levels(cve) returns the tiered advisory view for one CVE:
 --   L1 CNA        = assigner (cve_record → cna)
@@ -376,12 +387,19 @@ LANGUAGE sql STABLE AS $fn$
     AND r.url LIKE '%github.com/%/security/advisories/GHSA-%'
     AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source='ghsa')
   UNION
-  SELECT p_cve, 'L3 Downstream', a.source, a.url, false
+  -- L3 formal advisories; if a source has human pages only for some ids (when_id_prefix)
+  -- and this id isn't one (e.g. openSUSE-SU), fall back to its per-CVE page (cve_url).
+  SELECT p_cve, 'L3 Downstream', a.source,
+         CASE WHEN su.when_id_prefix IS NOT NULL AND a.advisory_id NOT LIKE su.when_id_prefix || '%'
+              THEN replace(su.cve_url, '{cve}', p_cve)
+              ELSE a.url END,
+         false
   FROM advisory_cve ac JOIN advisory a USING (source, advisory_id)
+  LEFT JOIN source_url su ON su.source = a.source
   WHERE ac.cve_id = p_cve AND a.source <> 'ghsa'
   UNION
-  SELECT p_cve, 'L3 Downstream', v.source, v.data->>'cve_url', true
-  FROM cve_vendor v
-  WHERE v.cve_id = p_cve AND v.data ? 'cve_url'
+  SELECT p_cve, 'L3 Downstream', v.source, replace(s.cve_url, '{cve}', p_cve), true
+  FROM cve_vendor v JOIN source_url s ON s.source = v.source
+  WHERE v.cve_id = p_cve AND s.cve_url IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
 $fn$;
