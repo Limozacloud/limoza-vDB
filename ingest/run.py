@@ -35,6 +35,7 @@ SOURCES = {
     "oracle":     ("ingest.advisories.oracle",   "advisory", "oracle"),
     "almalinux":  ("ingest.advisories.almalinux","advisory", "almalinux"),
     "rocky":      ("ingest.advisories.rocky",    "advisory", "rocky"),
+    "microsoft":  ("ingest.advisories.microsoft","advisory", "microsoft"),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
     "metasploit": ("ingest.exploits.metasploit", "exploits", "metasploit"),
     "nuclei":     ("ingest.exploits.nuclei",     "exploits", "nuclei"),
@@ -45,7 +46,7 @@ GROUPS = {
     "reference":  ["cna", "cpe", "cwe"],
     "scoring":    ["epss", "kev", "ssvc"],
     "records":    ["cvelistv5"],
-    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky"],
+    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft"],
     "exploits":   ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 
