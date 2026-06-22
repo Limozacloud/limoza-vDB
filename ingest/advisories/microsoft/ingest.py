@@ -7,7 +7,7 @@ from pathlib import Path
 
 from psycopg2.extras import Json
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.microsoft.transform import iter_vulns, parse, parse_document
 
 ORIGIN = "microsoft"
@@ -91,7 +91,7 @@ def run(conn, dirs: dict) -> int:
         for cid, acc in cve_data.items():
             data = {k: v for k, v in acc.items() if not k.startswith("_")}
             if data:
-                vb["cve_vendor"].append((cid, SOURCE, Json(data)))
+                vb["cve_vendor"].append(vendor_row(SOURCE, cid, data))
             if len(vb["cve_vendor"]) >= BATCH:
                 flush(cur, vb); conn.commit(); vb = new_bundle()
         flush(cur, vb); conn.commit()

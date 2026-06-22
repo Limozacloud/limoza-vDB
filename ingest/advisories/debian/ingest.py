@@ -10,7 +10,7 @@ from pathlib import Path
 
 from psycopg2.extras import Json
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.debian.transform import invert, parse, parse_osv_advisory
 
 ORIGIN = "debian"
@@ -41,7 +41,7 @@ def run(conn, dirs: dict) -> int:
             if e["scope"]:
                 data["scope"] = e["scope"]
             if data:
-                b["cve_vendor"].append((cid, SOURCE, Json(data)))
+                b["cve_vendor"].append(vendor_row(SOURCE, cid, data))
             n += 1
             if n % BATCH == 0:
                 flush(cur, b); conn.commit(); b = new_bundle()

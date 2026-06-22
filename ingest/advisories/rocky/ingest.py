@@ -8,7 +8,7 @@ from pathlib import Path
 
 from psycopg2.extras import Json
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.rocky.transform import parse, parse_advisory
 from ingest.core.cvss import score_from_vector, severity_from_score
 
@@ -70,7 +70,7 @@ def run(conn, dirs: dict) -> int:
 
         vb = new_bundle()
         for cid, (_, sev) in cve_sev.items():
-            vb["cve_vendor"].append((cid, SOURCE, Json({"severity": sev})))
+            vb["cve_vendor"].append(vendor_row(SOURCE, cid, {"severity": sev}))
             if len(vb["cve_vendor"]) >= BATCH:
                 flush(cur, vb); conn.commit(); vb = new_bundle()
         flush(cur, vb); conn.commit()

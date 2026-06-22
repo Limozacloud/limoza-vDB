@@ -8,7 +8,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import advisory_url, delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.suse.transform import parse, transform_vex, parse_advisory
 
 ORIGIN    = "suse"
@@ -58,7 +58,7 @@ def _import_vex(args):
             for s, l, val in rec["workaround"]:
                 b["workaround"].append((cid, ORIGIN, s, l, val))
             if rec["vendor_data"]:
-                b["cve_vendor"].append((cid, SOURCE, Json(rec["vendor_data"])))
+                b["cve_vendor"].append(vendor_row(SOURCE, cid, rec["vendor_data"]))
             n += 1
             if (i + 1) % BATCH == 0:
                 flush(cur, b); conn.commit(); b = new_bundle()
@@ -85,7 +85,7 @@ def _ingest_advisories(conn, adv_dir) -> int:
             aid, title, sev, pub, mod, url, cves = a
             if not cves:
                 continue
-            b["advisory"].append((SOURCE, aid, url, title, sev, pub, mod))
+            b["advisory"].append((SOURCE, aid, advisory_url(SOURCE, aid) or url, title, sev, pub, mod))
             for c in cves:
                 b["spine"].append((c,))
                 b["advisory_cve"].append((SOURCE, aid, c))

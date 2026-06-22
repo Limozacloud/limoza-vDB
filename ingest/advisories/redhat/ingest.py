@@ -8,7 +8,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.redhat.transform import parse, transform
 
 ORIGIN    = "redhat"
@@ -66,7 +66,7 @@ def _import_chunk(args):
                 b["advisory"].append((SOURCE, aid, url, None, None, None, None))
                 b["advisory_cve"].append((SOURCE, aid, cid))
             if rec["vendor_data"]:
-                b["cve_vendor"].append((cid, SOURCE, Json(rec["vendor_data"])))
+                b["cve_vendor"].append(vendor_row(SOURCE, cid, rec["vendor_data"]))
             n += 1
             if (i + 1) % BATCH == 0:
                 flush(cur, b)

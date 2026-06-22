@@ -9,10 +9,41 @@ Affected/version status is phase 3 and not handled here.
 Each source rebuilds only its own slice (delete_scope) before reinserting, so
 the swap is dashboard-safe and other sources are untouched.
 """
-from psycopg2.extras import execute_values
+import json
+import re
+from pathlib import Path
+
+from psycopg2.extras import Json, execute_values
 
 _CVE_ENRICH = ("cve_cvss", "cve_cwe", "cve_ref", "cve_desc",
                "cve_solution", "cve_workaround", "cve_impact")
+
+# Central per-source URL templates — single source of truth, editable JSON.
+# {cve}/{id}/{year}/{slug} placeholders; see source_urls.json for the docs.
+_SOURCE_URLS = {k: v for k, v in
+                json.loads((Path(__file__).parent / "source_urls.json").read_text()).items()
+                if not k.startswith("_")}
+
+
+def vendor_row(source: str, cve: str, data: dict) -> tuple:
+    """Build a cve_vendor row, stamping the source's per-CVE page url (cve_url template)."""
+    tmpl = (_SOURCE_URLS.get(source) or {}).get("cve_url")
+    if tmpl:
+        data = {**data, "cve_url": tmpl.replace("{cve}", cve)}
+    return (cve, source, Json(data))
+
+
+def advisory_url(source: str, advisory_id: str):
+    """Human advisory-page url from the central template, or None → keep the source's raw url.
+    Scoped by when_id_prefix (e.g. SUSE-SU only). {year}=first 4-digit run, {slug}=lower id sans ':'."""
+    cfg = _SOURCE_URLS.get(source) or {}
+    tmpl, pref = cfg.get("advisory_url"), cfg.get("when_id_prefix")
+    if not tmpl or (pref and not advisory_id.startswith(pref)):
+        return None
+    m = re.search(r"(\d{4})", advisory_id)
+    return (tmpl.replace("{id}", advisory_id)
+                .replace("{year}", m.group(1) if m else "")
+                .replace("{slug}", advisory_id.lower().replace(":", "")))
 
 
 def new_bundle() -> dict:
