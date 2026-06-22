@@ -8,6 +8,7 @@ import json
 import re
 
 from ingest.core.cveid import normalize
+from ingest.core.cvss import severity_from_score
 
 
 def _clean_text(v):
@@ -28,14 +29,10 @@ def _cvss(metrics, source, out):
             score = d.get("baseScore")
             if score is None:
                 continue
+            ver = d.get("version") or key.replace("cvssV", "").replace("_", ".")
             sev = d.get("baseSeverity")
-            out.append((
-                source,
-                d.get("version") or key.replace("cvssV", "").replace("_", "."),
-                float(score),
-                sev.lower() if sev else None,
-                d.get("vectorString"),
-            ))
+            sev = sev.lower() if sev else severity_from_score(score, ver)
+            out.append((source, ver, float(score), sev, d.get("vectorString")))
 
 
 def _cwe(problem_types, source, out):

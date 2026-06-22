@@ -23,6 +23,44 @@ CREATE TABLE IF NOT EXISTS adp (
 );
 CREATE INDEX IF NOT EXISTS idx_adp_short_name ON adp (short_name);
 
+-- ── Advisories ────────────────────────────────────────────────────────────────
+-- Vendor/distro security bulletins (RHSA, USN, GHSA, …). source = the ISSUER
+-- name (NOT a cna_id — issuers aren't always CNAs, e.g. Debian). One shared
+-- schema across all advisory sources (subfolders under ingest/advisories/).
+-- The issuer's per-CVE enrichment (cvss/cwe/ref/workaround/impact) lands in the
+-- cve_* tables with origin=<source>; only the advisory object + CVE links + the
+-- per-CVE vendor blob live here. Affected/version status = phase 3.
+CREATE TABLE IF NOT EXISTS advisory (
+    source       TEXT NOT NULL,    -- 'redhat'
+    advisory_id  TEXT NOT NULL,    -- 'RHSA-2024:2011'
+    url          TEXT,
+    title        TEXT,             -- not in RedHat VEX → may be NULL
+    severity     TEXT,             -- per-advisory severity (GHSA etc.) → may be NULL
+    published    TIMESTAMPTZ,
+    modified     TIMESTAMPTZ,
+    vendor_data  JSONB,            -- per-advisory source-specific extras
+    PRIMARY KEY (source, advisory_id)
+);
+
+CREATE TABLE IF NOT EXISTS advisory_cve (
+    source       TEXT NOT NULL,
+    advisory_id  TEXT NOT NULL,
+    cve_id       TEXT NOT NULL,
+    PRIMARY KEY (source, advisory_id, cve_id)
+);
+CREATE INDEX IF NOT EXISTS idx_advisory_cve_cve ON advisory_cve (cve_id);
+
+-- Per-CVE vendor assessment (RedHat severity, Ubuntu priority, …). One row per
+-- (cve, source); everything source-specific (incl. severity) goes in data JSONB,
+-- to be promoted to columns later if needed.
+CREATE TABLE IF NOT EXISTS cve_vendor (
+    cve_id  TEXT NOT NULL,
+    source  TEXT NOT NULL,         -- 'redhat'
+    data    JSONB,                 -- {"severity":"Important", ...}
+    PRIMARY KEY (cve_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_vendor_cve ON cve_vendor (cve_id);
+
 -- ── CVE spine ─────────────────────────────────────────────────────────────────
 -- Thin, shared registry of every known CVE id. Created by ANY source that
 -- mentions a CVE (`ON CONFLICT DO NOTHING`) — nobody owns it. No foreign keys:
@@ -56,7 +94,7 @@ CREATE TABLE IF NOT EXISTS cve_cvss (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id     TEXT NOT NULL,
     origin     TEXT NOT NULL,
-    source     TEXT NOT NULL,
+    source     TEXT,
     version    TEXT,                     -- 2.0 | 3.0 | 3.1 | 4.0
     base_score DOUBLE PRECISION,
     severity   TEXT,
@@ -69,7 +107,7 @@ CREATE TABLE IF NOT EXISTS cve_cwe (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     cwe_id  TEXT NOT NULL,               -- CWE-79
     UNIQUE (cve_id, source, cwe_id)
 );
@@ -79,7 +117,7 @@ CREATE TABLE IF NOT EXISTS cve_desc (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
     UNIQUE (cve_id, source, lang)
@@ -90,7 +128,7 @@ CREATE TABLE IF NOT EXISTS cve_ref (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     url     TEXT NOT NULL,
     type    TEXT,
     UNIQUE (cve_id, source, url)
@@ -103,7 +141,7 @@ CREATE TABLE IF NOT EXISTS cve_solution (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
     UNIQUE (cve_id, source, lang)
@@ -114,7 +152,7 @@ CREATE TABLE IF NOT EXISTS cve_workaround (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
     UNIQUE (cve_id, source, lang)
@@ -125,7 +163,7 @@ CREATE TABLE IF NOT EXISTS cve_impact (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id      TEXT NOT NULL,
     origin      TEXT NOT NULL,
-    source      TEXT NOT NULL,
+    source      TEXT,
     capec_id    TEXT,                    -- CAPEC-592
     description TEXT,
     UNIQUE (cve_id, source, capec_id)
@@ -136,7 +174,7 @@ CREATE TABLE IF NOT EXISTS cve_alias (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cve_id  TEXT NOT NULL,
     origin  TEXT NOT NULL,
-    source  TEXT NOT NULL,
+    source  TEXT,
     alias   TEXT NOT NULL,              -- GHSA-xxx, JVNDB-…, etc.
     UNIQUE (cve_id, alias)
 );
