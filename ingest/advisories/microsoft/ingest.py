@@ -8,12 +8,14 @@ from pathlib import Path
 from psycopg2.extras import Json
 
 from ingest.advisories import delete_scope, flush, new_bundle
-from ingest.advisories.microsoft.transform import iter_vulns, parse
+from ingest.advisories.microsoft.transform import iter_vulns, parse, parse_document
 
 ORIGIN = "microsoft"
 SOURCE = "microsoft"
 BATCH  = 2_000
 _SRANK = {"low": 1, "moderate": 2, "important": 3, "critical": 4}
+_EXRANK = {"n/a": 0, "exploitation unlikely": 1, "exploitation less likely": 2,
+           "exploitation more likely": 3, "exploitation detected": 4}
 
 
 def _source_uuid(conn):
@@ -34,15 +36,22 @@ def run(conn, dirs: dict) -> int:
 
     delete_scope(conn, ORIGIN, SOURCE)
 
-    cve_sev = {}
+    cve_data = {}   # cid -> accumulator (severity/impact/exploit status, aggregated)
     seen_cvss, seen_cwe, seen_desc = set(), set(), set()
     b = new_bundle()
     n = 0
     with conn.cursor() as cur:
         for f in files:
-            for rec in iter_vulns(parse(f.read_bytes()), src):
+            doc = parse(f.read_bytes())
+            rel, title, pub, mod = parse_document(doc)
+            if rel:
+                url = f"https://msrc.microsoft.com/update-guide/releaseNote/{rel}"
+                b["advisory"].append((SOURCE, rel, url, title, None, pub, mod))
+            for rec in iter_vulns(doc, src):
                 cid = rec["cve_id"]
                 b["spine"].append((cid,))
+                if rel:
+                    b["advisory_cve"].append((SOURCE, rel, cid))
                 for s, ver, sc, sev, vec in rec["cvss"]:
                     if (cid, vec) in seen_cvss:
                         continue
@@ -56,24 +65,36 @@ def run(conn, dirs: dict) -> int:
                 if rec["desc"] and cid not in seen_desc:
                     seen_desc.add(cid)
                     b["desc"].append((cid, ORIGIN, src, "en", rec["desc"]))
-                for kb, url in rec["kbs"].items():
-                    b["advisory"].append((SOURCE, kb, url, None, None, None, None))
-                    b["advisory_cve"].append((SOURCE, kb, cid))
+                acc = cve_data.setdefault(cid, {"_sev": 0, "_exp": -1})
                 if rec["severity"]:
                     rk = _SRANK.get(rec["severity"].lower(), 0)
-                    if rk > cve_sev.get(cid, (0, None))[0]:
-                        cve_sev[cid] = (rk, rec["severity"])
+                    if rk > acc["_sev"]:
+                        acc["_sev"], acc["severity"] = rk, rec["severity"]
+                if rec["impact"] and "impact" not in acc:
+                    acc["impact"] = rec["impact"]
+                for k in ("exploited", "publicly_disclosed"):
+                    val = rec[k]
+                    if val == "Yes":
+                        acc[k] = "Yes"
+                    elif val and acc.get(k) != "Yes":
+                        acc.setdefault(k, val)
+                if rec["exploitability"]:
+                    er = _EXRANK.get(rec["exploitability"].lower(), 0)
+                    if er > acc["_exp"]:
+                        acc["_exp"], acc["exploitability"] = er, rec["exploitability"]
                 n += 1
                 if n % BATCH == 0:
                     flush(cur, b); conn.commit(); b = new_bundle()
         flush(cur, b); conn.commit()
 
         vb = new_bundle()
-        for cid, (_, sev) in cve_sev.items():
-            vb["cve_vendor"].append((cid, SOURCE, Json({"severity": sev})))
+        for cid, acc in cve_data.items():
+            data = {k: v for k, v in acc.items() if not k.startswith("_")}
+            if data:
+                vb["cve_vendor"].append((cid, SOURCE, Json(data)))
             if len(vb["cve_vendor"]) >= BATCH:
                 flush(cur, vb); conn.commit(); vb = new_bundle()
         flush(cur, vb); conn.commit()
 
-    print(f"  microsoft: {len(cve_sev):,} CVEs · cvss {len(seen_cvss):,} · cwe {len(seen_cwe):,}")
-    return len(cve_sev)
+    print(f"  microsoft: {len(cve_data):,} CVEs · cvss {len(seen_cvss):,} · cwe {len(seen_cwe):,}")
+    return len(cve_data)

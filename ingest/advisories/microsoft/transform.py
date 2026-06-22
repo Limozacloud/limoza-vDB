@@ -47,20 +47,36 @@ def iter_vulns(doc: dict, source):
                     desc = t
                     break
 
-        sev, rank = None, 0
+        sev, rank, impact = None, 0, None
+        exploited = disclosed = exploitability = None
         for t in v.get("Threats") or []:
-            if t.get("Type") == 3:
-                val = (t.get("Description") or {}).get("Value")
+            tp = t.get("Type")
+            val = (t.get("Description") or {}).get("Value")
+            if tp == 3:                                  # severity (max)
                 rk = _SRANK.get((val or "").lower(), 0)
                 if rk > rank:
                     rank, sev = rk, val
-
-        kbs = {}
-        for r in v.get("Remediations") or []:
-            if r.get("Type") == 2:
-                num = ((r.get("Description") or {}).get("Value") or "").strip()
-                if num.isdigit():
-                    kbs["KB" + num] = r.get("URL") or f"https://support.microsoft.com/help/{num}"
+            elif tp == 0 and val and not impact:         # impact type (STRIDE-like)
+                impact = val
+            elif tp == 1 and val:                        # exploit status string
+                d = {}
+                for p in val.split(";"):
+                    if ":" in p:
+                        k, x = p.split(":", 1)
+                        d[k.strip()] = x.strip()
+                disclosed = disclosed or d.get("Publicly Disclosed")
+                exploited = exploited or d.get("Exploited")
+                exploitability = exploitability or d.get("Latest Software Release")
 
         yield {"cve_id": cid, "cvss": cvss, "cwe": cwe, "desc": desc,
-               "severity": sev, "kbs": kbs}
+               "severity": sev, "impact": impact, "exploited": exploited,
+               "publicly_disclosed": disclosed, "exploitability": exploitability}
+
+
+def parse_document(doc: dict):
+    """Document-level advisory = the monthly release (Patch Tuesday).
+    Returns (release_id, title, published, modified). KB→product fixes = phase 3."""
+    tr = doc.get("DocumentTracking") or {}
+    rel = ((tr.get("Identification") or {}).get("ID") or {}).get("Value")
+    title = (doc.get("DocumentTitle") or {}).get("Value")
+    return (rel, title, tr.get("InitialReleaseDate"), tr.get("CurrentReleaseDate"))
