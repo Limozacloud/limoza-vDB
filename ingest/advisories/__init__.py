@@ -38,17 +38,17 @@ def flush(cur, b: dict) -> None:
     if b["spine"]:
         execute_values(cur, "INSERT INTO cve (cve_id) VALUES %s ON CONFLICT DO NOTHING", b["spine"])
     if b["cvss"]:
-        execute_values(cur, "INSERT INTO cve_cvss (cve_id,origin,source,version,base_score,severity,vector) VALUES %s ON CONFLICT (cve_id,source,vector) DO NOTHING", b["cvss"])
+        execute_values(cur, "INSERT INTO cve_cvss (cve_id,origin,source,version,base_score,severity,vector) VALUES %s ON CONFLICT (cve_id,origin,source,vector) DO NOTHING", b["cvss"])
     if b["cwe"]:
-        execute_values(cur, "INSERT INTO cve_cwe (cve_id,origin,source,cwe_id) VALUES %s ON CONFLICT (cve_id,source,cwe_id) DO NOTHING", b["cwe"])
+        execute_values(cur, "INSERT INTO cve_cwe (cve_id,origin,source,cwe_id) VALUES %s ON CONFLICT (cve_id,origin,source,cwe_id) DO NOTHING", b["cwe"])
     if b["ref"]:
-        execute_values(cur, "INSERT INTO cve_ref (cve_id,origin,source,url,type) VALUES %s ON CONFLICT (cve_id,source,url) DO NOTHING", b["ref"])
+        execute_values(cur, "INSERT INTO cve_ref (cve_id,origin,source,url,type) VALUES %s ON CONFLICT (cve_id,origin,source,url) DO NOTHING", b["ref"])
     if b["desc"]:
-        execute_values(cur, "INSERT INTO cve_desc (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", b["desc"])
+        execute_values(cur, "INSERT INTO cve_desc (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", b["desc"])
     if b["solution"]:
-        execute_values(cur, "INSERT INTO cve_solution (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", b["solution"])
+        execute_values(cur, "INSERT INTO cve_solution (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", b["solution"])
     if b["workaround"]:
-        execute_values(cur, "INSERT INTO cve_workaround (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", b["workaround"])
+        execute_values(cur, "INSERT INTO cve_workaround (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", b["workaround"])
     if b["impact"]:
         execute_values(cur, "INSERT INTO cve_impact (cve_id,origin,source,capec_id,description) VALUES %s", b["impact"])
     if b["advisory"]:

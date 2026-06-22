@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS cve_cvss (
     base_score DOUBLE PRECISION,
     severity   TEXT,
     vector     TEXT,
-    UNIQUE (cve_id, source, vector)
+    UNIQUE (cve_id, origin, source, vector)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_cvss_cve ON cve_cvss (cve_id);
 
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS cve_cwe (
     origin  TEXT NOT NULL,
     source  TEXT,
     cwe_id  TEXT NOT NULL,               -- CWE-79
-    UNIQUE (cve_id, source, cwe_id)
+    UNIQUE (cve_id, origin, source, cwe_id)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_cwe_cve ON cve_cwe (cve_id);
 
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS cve_desc (
     source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
-    UNIQUE (cve_id, source, lang)
+    UNIQUE (cve_id, origin, source, lang)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_desc_cve ON cve_desc (cve_id);
 
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS cve_ref (
     source  TEXT,
     url     TEXT NOT NULL,
     type    TEXT,
-    UNIQUE (cve_id, source, url)
+    UNIQUE (cve_id, origin, source, url)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_ref_cve ON cve_ref (cve_id);
 
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS cve_solution (
     source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
-    UNIQUE (cve_id, source, lang)
+    UNIQUE (cve_id, origin, source, lang)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_solution_cve ON cve_solution (cve_id);
 
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS cve_workaround (
     source  TEXT,
     lang    TEXT,
     value   TEXT NOT NULL,
-    UNIQUE (cve_id, source, lang)
+    UNIQUE (cve_id, origin, source, lang)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_workaround_cve ON cve_workaround (cve_id);
 
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS cve_impact (
     source      TEXT,
     capec_id    TEXT,                    -- CAPEC-592
     description TEXT,
-    UNIQUE (cve_id, source, capec_id)
+    UNIQUE (cve_id, origin, source, capec_id)
 );
 CREATE INDEX IF NOT EXISTS idx_cve_impact_cve ON cve_impact (cve_id);
 

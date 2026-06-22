@@ -50,19 +50,19 @@ def _import_chunk(args):
                   title=EXCLUDED.title, exploit_note=EXCLUDED.exploit_note, synced_at=now()
             """, records)
         if cvss:
-            execute_values(cur, "INSERT INTO cve_cvss (cve_id,origin,source,version,base_score,severity,vector) VALUES %s ON CONFLICT (cve_id,source,vector) DO NOTHING", cvss)
+            execute_values(cur, "INSERT INTO cve_cvss (cve_id,origin,source,version,base_score,severity,vector) VALUES %s ON CONFLICT (cve_id,origin,source,vector) DO NOTHING", cvss)
         if cwe:
-            execute_values(cur, "INSERT INTO cve_cwe (cve_id,origin,source,cwe_id) VALUES %s ON CONFLICT (cve_id,source,cwe_id) DO NOTHING", cwe)
+            execute_values(cur, "INSERT INTO cve_cwe (cve_id,origin,source,cwe_id) VALUES %s ON CONFLICT (cve_id,origin,source,cwe_id) DO NOTHING", cwe)
         if desc:
-            execute_values(cur, "INSERT INTO cve_desc (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", desc)
+            execute_values(cur, "INSERT INTO cve_desc (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", desc)
         if ref:
-            execute_values(cur, "INSERT INTO cve_ref (cve_id,origin,source,url,type) VALUES %s ON CONFLICT (cve_id,source,url) DO NOTHING", ref)
+            execute_values(cur, "INSERT INTO cve_ref (cve_id,origin,source,url,type) VALUES %s ON CONFLICT (cve_id,origin,source,url) DO NOTHING", ref)
         if sol:
-            execute_values(cur, "INSERT INTO cve_solution (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", sol)
+            execute_values(cur, "INSERT INTO cve_solution (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", sol)
         if wrk:
-            execute_values(cur, "INSERT INTO cve_workaround (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,source,lang) DO NOTHING", wrk)
+            execute_values(cur, "INSERT INTO cve_workaround (cve_id,origin,source,lang,value) VALUES %s ON CONFLICT (cve_id,origin,source,lang) DO NOTHING", wrk)
         if imp:
-            execute_values(cur, "INSERT INTO cve_impact (cve_id,origin,source,capec_id,description) VALUES %s ON CONFLICT (cve_id,source,capec_id) DO NOTHING", imp)
+            execute_values(cur, "INSERT INTO cve_impact (cve_id,origin,source,capec_id,description) VALUES %s ON CONFLICT (cve_id,origin,source,capec_id) DO NOTHING", imp)
         conn.commit()
         spine.clear(); records.clear(); cvss.clear(); cwe.clear(); desc.clear(); ref.clear()
         sol.clear(); wrk.clear(); imp.clear()
