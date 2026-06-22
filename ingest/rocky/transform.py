@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Iterator, Optional
 
+from ingest.purl import distro_purl
+
 _SEVERITY = {"Critical": "critical", "Important": "high", "Moderate": "medium", "Low": "low"}
 _REF_TYPE  = {"bugzilla": "report", "self": "advisory"}
 
@@ -103,7 +105,7 @@ def parse_updateinfo(xml_path: Path, major: str) -> Iterator[dict]:
                         fix_ver = f"{epoch}:{fix_ver}"
                     packages.append({
                         "name":              name,
-                        "purl":              f"pkg:rpm/rocky/{name}?distro=rocky-{major}",
+                        "purl":              distro_purl("rpm", "rocky", name, f"rocky-{major}"),
                         "affected_state":    "affected",
                         "remediation_state": "fixed",
                         "status_raw":        "fixed",
@@ -271,7 +273,7 @@ def transform_advisories(advisories: list[dict]) -> Iterator[dict]:
 
             pkgs_by_major.setdefault(major, []).append({
                 "name":              name,
-                "purl":              f"pkg:rpm/rocky/{name}?distro=rocky-{major}",
+                "purl":              distro_purl("rpm", "rocky", name, f"rocky-{major}"),
                 "affected_state":    "affected",
                 "remediation_state": "fixed",
                 "status_raw":        "fixed",

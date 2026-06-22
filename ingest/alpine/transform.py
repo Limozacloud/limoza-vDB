@@ -2,6 +2,8 @@
 import re
 from typing import Iterator
 
+from ingest.purl import distro_purl
+
 _CVE_RE = re.compile(r"^CVE-\d{4}-\d+$")
 
 
@@ -38,7 +40,7 @@ def transform_file(data: dict) -> Iterator[dict]:
 
                     pkg_rec = {
                         "name":              name,
-                        "purl":              f"pkg:apk/alpine/{name}?distro={version_str}",
+                        "purl":              distro_purl("apk", "alpine", name, version_str),
                         "affected_state":    aff,
                         "remediation_state": rem_st,
                         "status_raw":        "0" if fix_ver == "0" else fix_ver,

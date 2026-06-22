@@ -2,6 +2,8 @@
 import datetime
 from typing import Iterator
 
+from ingest.purl import distro_purl
+
 _SEVERITY = {"Critical": "critical", "Important": "high", "Moderate": "medium", "Low": "low"}
 
 _REF_TYPE = {"bugzilla": "report", "rhsa": "advisory", "self": "advisory"}
@@ -72,7 +74,7 @@ def transform_advisories(data: list, major: str) -> Iterator[dict]:
 
             packages.append({
                 "name":              name,
-                "purl":              f"pkg:rpm/almalinux/{name}?distro=almalinux-{major}",
+                "purl":              distro_purl("rpm", "almalinux", name, f"almalinux-{major}"),
                 "affected_state":    "affected",
                 "remediation_state": "fixed",
                 "status_raw":        "fixed",

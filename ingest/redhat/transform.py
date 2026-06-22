@@ -3,6 +3,7 @@ import re
 from typing import Optional
 from ingest.utils import walk_branches
 from ingest.mapping import CSAF_REM_STATES, VEX_JUSTIFICATIONS
+from ingest.purl import distro_purl
 
 _SEVERITY_MAP = {
     "critical":  "critical",
@@ -26,11 +27,8 @@ def _el_distro(cpe22: str) -> Optional[str]:
 
 
 def _rpm_purl(name: str, cpe22: str) -> str:
-    ver  = _el_distro(cpe22)
-    purl = f"pkg:rpm/redhat/{name}"
-    if ver:
-        purl += f"?distro=el{ver}"
-    return purl
+    ver = _el_distro(cpe22)
+    return distro_purl("rpm", "redhat", name, f"el{ver}" if ver else None)
 
 
 def _parse_nvr_arch(nvr_arch: str) -> Optional[tuple[str, str]]:

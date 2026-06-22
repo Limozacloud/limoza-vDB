@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Iterator, Optional
 
+from ingest.purl import distro_purl
+
 _EARLIER_RE = re.compile(r"^(.+?)\s+is earlier than\s+(.+)$")
 _PLATFORM_RE = re.compile(r"Oracle Linux\s+(\d+)")
 _EPOCH_RE    = re.compile(r"^\d+:")
@@ -133,7 +135,7 @@ def _transform_definition(elem) -> list:
                 seen.add(key)
                 packages.append({
                     "name":              pkg_name,
-                    "purl":              f"pkg:rpm/oracle/{pkg_name}?distro=ol{ol_ver}",
+                    "purl":              distro_purl("rpm", "oracle", pkg_name, f"ol{ol_ver}"),
                     "affected_state":    "affected",
                     "remediation_state": "fixed",
                     "status_raw":        "fixed",

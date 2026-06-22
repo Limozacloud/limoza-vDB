@@ -1,6 +1,8 @@
 """Transform Ubuntu OpenVEX CVE document → upsert_lve_record format."""
 from typing import Optional
 
+from ingest.purl import distro_purl
+
 # codename → (version_string, display_name)
 _CODENAMES: dict[str, tuple[str, str]] = {
     "resolute": ("26.04", "Ubuntu 26.04"),
@@ -76,7 +78,7 @@ def _parse_purl(purl: str) -> Optional[tuple]:
 
 
 def _deb_purl(name: str, codename: str) -> str:
-    return f"pkg:deb/ubuntu/{name}?distro={codename}"
+    return distro_purl("deb", "ubuntu", name, codename)
 
 
 def _usn_from_aliases(aliases: list) -> Optional[str]:

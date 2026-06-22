@@ -1,4 +1,5 @@
 orjson
+packageurl-python
 psycopg2-binary
 httpx
 python-debian

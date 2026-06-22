@@ -5,6 +5,8 @@ GitHub Actions. Skips GHSA-prefixed primary IDs (handled by GHSA importer).
 """
 from typing import Optional
 
+from ingest.purl import ecosystem_purl as _ecosystem_purl
+
 _CVSS_VERSION_MAP = {
     "CVSS_V4": "4.0",
     "CVSS_V3": "3.1",
@@ -30,44 +32,6 @@ _REF_TYPE_MAP = {
     "EVIDENCE":  "web",
     "DETECTION": "web",
 }
-
-
-def _ecosystem_purl(ecosystem: str, name: str, purl_hint: str = "") -> Optional[str]:
-    if purl_hint:
-        return purl_hint
-    if not ecosystem or not name:
-        return None
-    eco = ecosystem.strip().lower()
-    if eco == "npm":
-        if name.startswith("@"):
-            scope, _, pkg = name[1:].partition("/")
-            return f"pkg:npm/%40{scope}/{pkg}" if pkg else None
-        return f"pkg:npm/{name}"
-    if eco == "pypi":
-        return f"pkg:pypi/{name.lower().replace('-', '_')}"
-    if eco == "go":
-        return f"pkg:golang/{name}"
-    if eco == "maven":
-        sep = ":" if ":" in name else "/"
-        parts = name.split(sep, 1)
-        return f"pkg:maven/{parts[0]}/{parts[1]}" if len(parts) == 2 else None
-    if eco in ("rubygems", "ruby"):
-        return f"pkg:gem/{name}"
-    if eco == "nuget":
-        return f"pkg:nuget/{name}"
-    if eco in ("crates.io", "cargo"):
-        return f"pkg:cargo/{name}"
-    if eco in ("packagist", "composer"):
-        return f"pkg:composer/{name}"
-    if eco == "hex":
-        return f"pkg:hex/{name}"
-    if eco == "pub":
-        return f"pkg:pub/{name}"
-    if eco == "github actions":
-        return f"pkg:githubactions/{name}"
-    if eco == "swift":
-        return f"pkg:swift/{name}"
-    return None
 
 
 def _extract_ranges(affected_ranges: list) -> tuple[list, Optional[str], Optional[str]]:

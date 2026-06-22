@@ -2,6 +2,8 @@
 import re
 from typing import Iterator, Optional
 
+from ingest.purl import distro_purl
+
 _ADV_HDR_RE  = re.compile(r"^\[(\d{1,2})\s+(\w{3})\s+(\d{4})\]\s+((?:DSA|DLA)-\d+-\d+)\s+(.*?)$")
 _CVE_LINE_RE = re.compile(r"\{([^}]+)\}")
 _REL_LINE_RE = re.compile(r"^\s+\[([^\]]+)\]")
@@ -93,7 +95,7 @@ def _cpe(major: str) -> str:
 
 
 def _purl(name: str, codename: str) -> str:
-    return f"pkg:deb/debian/{name}?distro={codename}"
+    return distro_purl("deb", "debian", name, codename)
 
 
 def _states(status: str, fixed_version: str) -> tuple[str, str, Optional[str]]:

@@ -2,6 +2,7 @@
 import re
 from typing import Optional
 from ingest.mapping import CSAF_REM_STATES
+from ingest.purl import distro_purl
 
 _IMPACT_SUMMARY_RE = re.compile(r"Impact Summary:\s*(.+?)(?:\n\n|\Z)", re.DOTALL)
 
@@ -40,11 +41,7 @@ def _distro_from_cpe(cpe: str) -> Optional[str]:
 
 
 def _rpm_purl(name: str, cpe: str) -> str:
-    distro = _distro_from_cpe(cpe)
-    purl   = f"pkg:rpm/suse/{name}"
-    if distro:
-        purl += f"?distro={distro}"
-    return purl
+    return distro_purl("rpm", "suse", name, _distro_from_cpe(cpe))
 
 
 def _split_pkg(pkg_str: str) -> tuple:
