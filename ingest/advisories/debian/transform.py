@@ -18,6 +18,16 @@ def parse(raw: bytes) -> dict:
     return json.loads(raw)
 
 
+def parse_osv_advisory(d: dict):
+    """OSV DSA/DLA/DTSA entry → (advisory_id, title, published, modified, [cve_ids]).
+    The CVE links are in `upstream` (alongside DEBIAN-CVE-* which normalize() drops)."""
+    aid = d.get("id")
+    if not aid:
+        return None
+    cves = [c for c in (normalize(u) for u in (d.get("upstream") or [])) if c]
+    return (aid, d.get("summary"), d.get("published"), d.get("modified"), cves)
+
+
 def invert(d: dict) -> dict:
     """package-keyed tracker → {cve_id: {desc, scope, urgency}} (urgency = highest seen)."""
     per: dict = {}
