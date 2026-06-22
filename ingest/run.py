@@ -30,6 +30,7 @@ SOURCES = {
     "cvelistv5":  ("ingest.records.cvelistv5",   "cve_record", None),
     "redhat":     ("ingest.advisories.redhat",   "advisory", "redhat"),
     "suse":       ("ingest.advisories.suse",     "advisory", "suse"),
+    "ubuntu":     ("ingest.advisories.ubuntu",   "advisory", "ubuntu"),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
     "metasploit": ("ingest.exploits.metasploit", "exploits", "metasploit"),
     "nuclei":     ("ingest.exploits.nuclei",     "exploits", "nuclei"),
@@ -40,7 +41,7 @@ GROUPS = {
     "reference":  ["cna", "cpe", "cwe"],
     "scoring":    ["epss", "kev", "ssvc"],
     "records":    ["cvelistv5"],
-    "advisories": ["redhat", "suse"],
+    "advisories": ["redhat", "suse", "ubuntu"],
     "exploits":   ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 
