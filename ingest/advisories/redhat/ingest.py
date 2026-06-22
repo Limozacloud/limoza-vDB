@@ -63,7 +63,7 @@ def _import_chunk(args):
             for s, cap, d in rec["impact"]:
                 b["impact"].append((cid, ORIGIN, s, cap, d))
             for aid, url in rec["rhsa"].items():
-                b["advisory"].append((SOURCE, aid, url))
+                b["advisory"].append((SOURCE, aid, url, None, None, None, None))
                 b["advisory_cve"].append((SOURCE, aid, cid))
             if rec["vendor_data"]:
                 b["cve_vendor"].append((cid, SOURCE, Json(rec["vendor_data"])))

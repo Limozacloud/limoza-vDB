@@ -52,7 +52,7 @@ def flush(cur, b: dict) -> None:
     if b["impact"]:
         execute_values(cur, "INSERT INTO cve_impact (cve_id,origin,source,capec_id,description) VALUES %s", b["impact"])
     if b["advisory"]:
-        execute_values(cur, "INSERT INTO advisory (source,advisory_id,url) VALUES %s ON CONFLICT (source,advisory_id) DO NOTHING", b["advisory"])
+        execute_values(cur, "INSERT INTO advisory (source,advisory_id,url,title,severity,published,modified) VALUES %s ON CONFLICT (source,advisory_id) DO NOTHING", b["advisory"], template="(%s,%s,%s,%s,%s,%s,%s)")
     if b["advisory_cve"]:
         execute_values(cur, "INSERT INTO advisory_cve (source,advisory_id,cve_id) VALUES %s ON CONFLICT DO NOTHING", b["advisory_cve"])
     if b["cve_vendor"]:
