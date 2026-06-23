@@ -347,6 +347,39 @@ CREATE TABLE IF NOT EXISTS source_url (
     when_id_prefix TEXT
 );
 
+-- ── L4: affected version status (OSV-shaped, two coordinates + VEX status) ─────
+-- Derived by `vdb affected` (a central post-pass over the synced/ingested sources).
+-- One row per (cve, package, release): the affected range (introduced / fixed /
+-- last_affected) plus a canonical `status` that drives the matcher; `status_raw`
+-- keeps the source's original wording. coord='purl' for managed/ecosystem software,
+-- coord='cpe' for unmanaged/binaries. origin = the extractor (delete-scope unit).
+CREATE TABLE IF NOT EXISTS affected (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id         TEXT NOT NULL,
+    coord          TEXT NOT NULL CHECK (coord IN ('purl','cpe')),
+    ecosystem      TEXT,
+    package        TEXT,
+    purl           TEXT,
+    cpe23          TEXT,
+    release        TEXT,
+    introduced     TEXT,
+    fixed          TEXT,
+    last_affected  TEXT,
+    version_scheme TEXT,
+    status         TEXT NOT NULL CHECK (status IN
+                     ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
+    status_raw     TEXT,
+    justification  TEXT,
+    source         TEXT NOT NULL,
+    status_source  TEXT NOT NULL DEFAULT 'own',
+    origin         TEXT NOT NULL,
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_affected_cve  ON affected (cve_id);
+CREATE INDEX IF NOT EXISTS idx_affected_purl ON affected (purl);
+CREATE INDEX IF NOT EXISTS idx_affected_cpe  ON affected (cpe23);
+CREATE INDEX IF NOT EXISTS idx_affected_pkg  ON affected (ecosystem, package);
+
 -- ── L1–L3 advisory tiering (dashboard) ────────────────────────────────────────
 -- cve_levels(cve) returns the tiered advisory view for one CVE:
 --   L1 CNA        = assigner (cve_record → cna)

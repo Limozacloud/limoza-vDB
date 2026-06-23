@@ -84,6 +84,9 @@ def main(argv: list[str]) -> int:
     if cmd == "create-token":
         return _create_token(argv[1:])
 
+    if cmd == "affected":
+        return _affected(argv[1:])
+
     if cmd not in ("sync", "ingest"):
         print(f"unknown command: {cmd}\n{__doc__}")
         return 1
@@ -137,6 +140,33 @@ def _log_sync(conn, source, result, started, log_run) -> None:
         items = result if isinstance(result, int) else None
         msg   = f"fetched {items:,}" if items is not None else "fetched"
         log_run(conn, source, "sync", "success", items=items, message=msg, started_at=started)
+
+
+def _affected(targets=None) -> int:
+    """Central L4 pass: derive the affected-version layer from synced/ingested data.
+    Optional targets restrict the run to specific extractors (e.g. `vdb affected suse`)."""
+    import datetime
+
+    from ingest.affected.run import run as run_affected
+    from ingest.core.db import get_conn, log_run
+
+    conn = get_conn()
+    started = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        before = _table_total(conn, "affected")
+        run_affected(conn, _dirs(), only=targets or None)
+        after = _table_total(conn, "affected")
+        log_run(conn, "affected", "ingest", "success", count_before=before,
+                count_after=after, message=f"{after:,} total", started_at=started)
+    finally:
+        conn.close()
+    return 0
+
+
+def _table_total(conn, table) -> int:
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT count(*) FROM {table}")
+        return cur.fetchone()[0]
 
 
 def _create_token(args) -> int:
@@ -217,7 +247,7 @@ def _hasura_init() -> int:
     MANY = {"cve_cvss": "cvss", "cve_cwe": "cwes", "cve_desc": "descriptions",
             "cve_ref": "refs", "cve_solution": "solutions", "cve_workaround": "workarounds",
             "cve_impact": "impacts", "cve_alias": "aliases", "cve_vendor": "vendors",
-            "advisory_cve": "advisory_cve", "exploits": "exploits"}
+            "advisory_cve": "advisory_cve", "exploits": "exploits", "affected": "affected"}
     OTHER = ["advisory", "adp", "cna", "cpe", "cwe", "sync_log", "cve_level"]
     ALL = [SPINE] + list(ONE) + list(MANY) + OTHER
 
