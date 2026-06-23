@@ -1,162 +1,126 @@
-# OSV (osv.dev)
+# OSV — native ecosystem advisory DBs
 
-OSV is Google's distributed vulnerability database. This importer ingests the
-**package-ecosystem** advisories (PyPI, npm, Go, crates.io, RubyGems, NuGet, Maven,
-Packagist, Hex, Pub) and writes affected packages and fix versions to `upstream[]`,
-keyed by ecosystem PURL. It is structurally the same OSV format that GHSA uses, with
-osv.dev as the advisory source.
+This importer ingests the **native** advisory databases of five language ecosystems
+that publish their own advisories independently of GHSA:
 
-OSV-prefixed records (e.g. `PYSEC-`, `GO-`, `RUSTSEC-`) are imported here; primary IDs
-starting with `CVE-` or `GHSA-` are skipped (handled by the NVD and GHSA importers
-respectively).
+| Ecosystem | OSV id prefix | Source name | Advisory DB |
+|---|---|---|---|
+| Python (PyPI) | `PYSEC-` | `pypa` | Python Packaging Advisory Database |
+| Go | `GO-` | `go` | Go Vulnerability Database |
+| Rust (crates.io) | `RUSTSEC-` | `rustsec` | RustSec Advisory DB |
+| Erlang (Hex) | `EEF-` | `eef` | Erlang Ecosystem Foundation |
+| PHP (Packagist) | `DRUPAL-` | `drupal` | Drupal Security Advisories |
 
-## OSV GCS package-ecosystem advisories
-- **URL:** `https://osv-vulnerabilities.storage.googleapis.com/<Ecosystem>/all.zip`
-- **Official:** Yes — Google/OSV-maintained
-- **Format:** OSV (JSON), one advisory per file, distributed as per-ecosystem `all.zip`
-- **Local path:** `osv/<Ecosystem>/<advisory>.json` (ecosystem name spaces → underscores, e.g. `crates.io/`)
-- **Sync:** downloads `all.zip` for every ecosystem (16 parallel workers), extracts, then builds `osv/osv_index.json` ({CVE-ID → [relative paths]}) from `related` + `aliases` + `upstream` references, and writes `osv/checkpoint.json` with the sync timestamp.
-- **Content:** ecosystem package advisories with affected version ranges, fix versions, CVSS, CWE, and references.
+These are **L3 downstream** sources in the [advisory tier](../advisory-tiers.md) model
+— they are ecosystem package maintainers who ship fixes and publish their own bulletins.
+GHSA is the L2 upstream layer that aggregates many of the same records under GHSA ids;
+it has its own importer ([ghsa.md](ghsa.md)) and is not ingested here.
 
-> **Note on ecosystems.** Sync also downloads the **OS** ecosystems (AlmaLinux,
-> Rocky Linux, Red Hat, Debian, Ubuntu, Alpine), but those are used only for the
-> OSV cross-check (`compare.py` / `verify` command) — they are **not** ingested here.
-> Only the package ecosystems (`PKG_ECOSYSTEMS`) are imported into the DB.
+Records with a primary id starting with `GHSA-`, `CVE-`, `MAL-`, or plain `OSV-` are
+dropped. Only the five native prefixes listed above are kept.
+
+## OSV GCS per-ecosystem zips
+
+- **URL:** `https://osv-vulnerabilities.storage.googleapis.com/{Ecosystem}/all.zip`
+  (one zip per ecosystem: `PyPI`, `Go`, `crates.io`, `Hex`, `Packagist`)
+- **Official:** Yes — Google/OSV-maintained distribution
+- **Format:** OSV (JSON), one advisory per file, packed into a per-ecosystem `all.zip`
+- **Local path:** `{osv}/{Ecosystem}.zip`
+- **Sync:** download `all.zip` for each of the five ecosystems. All files are replaced on every sync (no incremental).
+- **Content:** ecosystem advisory ids, CVE aliases, description prose, published/modified dates, and affected package identities (PURLs). No CVSS or CWE fields are produced by this importer.
 
 ```
 osv/
-├── id                                  ✅ → aliases[] (OSV-ID) + advisories[].@id   (CVE-/GHSA- prefixes ⇒ skipped)
+├── id                                  ✅ → advisory.advisory_id (e.g. "PYSEC-2024-42")
+│                                           + advisory.url  (see URL derivation below)
+│                                           (GHSA-/CVE-/MAL-/OSV- prefix → record skipped)
 ├── withdrawn                           ✅ → record skipped entirely if present
-├── aliases[] + related[]/
-│   └── [CVE-*]                         ✅ → cve.cve_id (first) + aliases[]  (no CVE found ⇒ skipped)
-├── summary                             ✅ → titles[].value + descriptions[].value (fallback)
-├── details                             ✅ → descriptions[].value (preferred over summary)
-├── published                           ✅ → advisories[].published + history[].date (advisory_added)
-├── modified                            ✅ → advisories[].updated + history[].date (advisory_updated, if ≠ published)
-├── severity[]/                         (CVSS vectors)
-│   ├── type (CVSS_V4/V3/V2)            ✅ → cvss[].version (4.0/3.1/2.0)
-│   └── score (vector string)           ✅ → cvss[].vector
-├── database_specific/
-│   ├── cvss                            ✅ → cvss[].score   (numeric; entry skipped if absent/non-numeric)
-│   ├── severity                        ✅ → cvss[].severity (mapped)
-│   └── cwe_ids[]                       ✅ → cwes[].id  (CWE-* only)
-├── references[]/
-│   ├── url                             ✅ → references[].url
-│   └── type                            ✅ → references[].type  (mapped, else "web")
+├── aliases[]
+│   └── [CVE-*]                         ✅ → cve spine (cve.cve_id) + advisory_cve.cve_id
+│                                           (no CVE alias → record skipped)
+├── summary                             ✅ → advisory.title  (first 100 chars of details used as fallback)
+├── details                             ✅ → cve_desc.value  (en; one row per (cve_id, source))
+├── published                           ✅ → advisory.published
+├── modified                            ✅ → advisory.modified
+├── severity[]                          ✗  not consumed
+├── database_specific/                  ✗  not consumed
+├── references[]                        ✗  not consumed
 └── affected[]/
-    ├── package/
-    │   ├── purl                        ✅ → upstream[].purl  (used verbatim as hint if present)
-    │   ├── ecosystem                   ✅ → upstream[].purl (ecosystem mapping, when no purl hint)
-    │   └── name                        ✅ → upstream[].purl
-    ├── ranges[]/
-    │   ├── [type=ECOSYSTEM|SEMVER]
-    │   │   └── events[introduced|fixed|last_affected]  ✅ → upstream[].ranges[] + upstream[].fix_version
-    │   └── [type=GIT].events[fixed]    ✅ → upstream[].fix_commit
-    ├── versions[]                      ✅ → upstream[].versions
-    └── database_specific/              ✗
-```
+    └── package/{purl, ecosystem, name} ✅ → purls collected for GHSA cross-alias disambiguation only
+                                            (not written to any table; version ranges are phase 3)
 
 Legend: ✅ imported  ✗ not imported
+```
 
-## PURL
+### Advisory URL derivation
 
-OSV emits **ecosystem PURLs** on `upstream[]`. If the source supplies
-`affected[].package.purl`, it is used **verbatim**; otherwise the PURL is derived from
-`ecosystem` + `name`. An unmapped ecosystem (with no purl hint) yields no PURL and the
-affected entry is dropped.
+The canonical URL per advisory id prefix:
 
-| OSV ecosystem | PURL produced |
+| Prefix | URL pattern |
 |---|---|
-| `npm` | `pkg:npm/<name>` (scoped `@scope/pkg` → `pkg:npm/%40scope/pkg`) |
-| `PyPI` | `pkg:pypi/<name>` (lowercased, `-` → `_`) |
-| `Go` | `pkg:golang/<module>` |
-| `Maven` | `pkg:maven/<group>/<artifact>` (splits on `:` or `/`) |
-| `RubyGems` / `Ruby` | `pkg:gem/<name>` |
-| `NuGet` | `pkg:nuget/<name>` |
-| `crates.io` / `Cargo` | `pkg:cargo/<name>` |
-| `Packagist` / `Composer` | `pkg:composer/<name>` |
-| `Hex` | `pkg:hex/<name>` |
-| `Pub` | `pkg:pub/<name>` |
-| `GitHub Actions` | `pkg:githubactions/<name>` |
-| `Swift` | `pkg:swift/<name>` |
-| (any other) | none — entry skipped |
+| `GO-` | `https://pkg.go.dev/vuln/{id}` |
+| `RUSTSEC-` | `https://rustsec.org/advisories/{id}.html` |
+| `PYSEC-` / `EEF-` / `DRUPAL-` | `affected[].database_specific.source` (first found), else `https://osv.dev/vulnerability/{id}` |
 
-The PURL is a package identity (no version). Versions live in `upstream[].ranges[]`
-(introduced/fixed/last_affected), `upstream[].fix_version` (latest fixed),
-`upstream[].fix_commit` (from GIT ranges), and `upstream[].versions[]`.
+## Cross-alias disambiguation
 
-## State mapping
+Some native OSV records carry multiple CVE aliases because they describe a
+vulnerability that was later split into separate CVEs, or because the upstream
+advisory was filed before the CVEs were issued. Linking the advisory to every CVE
+in its alias list would create spurious L3 advisory entries for CVEs the advisory
+does not actually cover.
 
-OSV writes to `upstream[]`, not `packages[]`, and does not emit
-`affected_state` / `remediation_state`. Affected status is implicit in the ranges:
-`introduced: "0"` with a `fixed` bound means all versions below the fix are affected;
-a `last_affected` event marks the last affected version where no fix is recorded.
+The importer uses GHSA's `cve_vendor.data.packages` (already in the database) as a
+precise CVE→purl map. For a native advisory that lists more than one CVE alias, any
+CVE whose GHSA-known package set does not intersect the advisory's own package set
+is dropped from `advisory_cve`. The advisory row itself is still written; only the
+loose cross-alias link is suppressed.
 
-CVSS severity is mapped `CRITICAL→critical`, `HIGH→high`, `MEDIUM→medium`,
-`LOW→low`, `NONE→informational`. Reference types map
-`ADVISORY→advisory`; `FIX`/`GIT→patch`; `REPORT→report`; `ARTICLE→article`;
-`WEB`/`PACKAGE`/`EVIDENCE`/`DETECTION→web`; unmapped → `web`.
+```
+multi-CVE advisory?
+  YES → for each cve_id:
+          known = ghsa_purls[cve_id]    # from cve_vendor WHERE source='ghsa'
+          if known AND advisory.purls AND (advisory.purls ∩ known) == ∅ → drop link
+        else → write advisory_cve normally
+```
+
+This makes GHSA a dependency of the OSV ingest: the OSV importer reads the GHSA
+purl map at startup. Run GHSA ingest before OSV ingest.
 
 ## Notes
-- A record is **skipped** (returns `None`) if: the primary `id` is missing or starts with `CVE-`/`GHSA-`; it is `withdrawn`; no `CVE-*` is found in `aliases` **or** `related`; or it produces **no** `upstream[]` entries (every affected package had an unmappable ecosystem).
-- CVE detection considers both `aliases[]` and `related[]` (GHSA considers only `aliases[]`).
-- The Swift/GitHub Actions mappings exist in code; the Erlang→hex fallback present in GHSA is **not** in the OSV mapper.
-- Duplicate `affected[]` entries for the same `(ecosystem, name)` are merged: ranges concatenated, `fix_version` / `versions` updated.
-- `cve.cve_id` is the only `cve{}` field OSV writes — it never sets the spine (status/published/updated); that comes from NVD.
-- CVSS is only inserted when `database_specific.cvss` is a parseable numeric score.
-- The transform includes empty `mitigations[]` and `impacts[]` keys in its return dict but never populates them.
-- The transform returns a single dict (or `None`), unlike GHSA/NVD which return a list.
+
+- **`origin` and `source` are the same source name** (`pypa`, `go`, `rustsec`, `eef`,
+  or `drupal`) — each native DB owns its own delete-scope slice.
+- **`cve_desc`** is written with `origin = source` (e.g. `"pypa"`) and `source = NULL`
+  (no CNA UUID — these are not CNAs). One row per `(cve_id, source)`.
+- **No CVSS or CWE enrichment.** The OSV native-format files for these ecosystems
+  rarely carry well-formed CVSS vectors; any available CVSS data comes from GHSA or
+  the CVE List.
+- **Affected package purls / version ranges** are collected internally for the
+  cross-alias filter but are not written to any table. Full version range semantics
+  belong to the phase-3 affected table.
+- The importer produces one `advisory` row and one or more `advisory_cve` rows per
+  record. No `cve_vendor` rows are written.
+- `severity` in `advisory` is always `NULL` for these sources (the OSV files do not
+  carry a uniform severity field that the importer consumes).
 
 ---
 
-## Schema Coverage
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [OSV-ID] + CVE-* from aliases[]/related[]
-├── has_exploit                  ❌  not written — no exploit data
-│
-├── cve{}
-│   ├── cve_id                   ✅  first CVE-* found  (seed only — spine not set)
-│   ├── status                   ❌  NVD only
-│   ├── published               ❌  NVD only
-│   ├── updated                 ❌  NVD only
-│   ├── epss{}                   ❌  EPSS vendor
-│   ├── kev{}                    ❌  CISA-KEV vendor
-│   └── ssvc{}                   ❌  CISA-SSVC vendor
-│
-├── titles[]                     ✅  summary
-├── descriptions[]              ✅  details (or summary fallback)
-├── cvss[]                       ✅  severity[].score (vector) + database_specific.cvss/severity
-├── cwes[]                       ✅  database_specific.cwe_ids (CWE-* only); name = null
-├── references[]                 ✅  references[].url + mapped type
-│
-├── advisories[]
-│   ├── @id                      ✅  OSV-ID
-│   ├── url                      ✅  https://osv.dev/vulnerability/<OSV-ID>
-│   ├── published               ✅  published
-│   ├── updated                 ✅  modified
-│   └── vendor_data             ❌  not written
-│
-├── upstream[]
-│   ├── @id                      ✅  <OSV-ID>:<ecosystem>:<name>
-│   ├── purl                     ✅  package.purl hint, else ecosystem PURL
-│   ├── fix_version             ✅  latest fixed version from ECOSYSTEM/SEMVER ranges
-│   ├── fix_commit              ✅  first fixed commit from GIT ranges
-│   ├── ranges[]                ✅  {introduced, fixed, last_affected}
-│   ├── versions[]              ✅  affected[].versions
-│   ├── source                  ✅  "osv"
-│   └── advisory_ref            ✅  OSV-ID
-│
-├── packages[]                   ❌  not written — OSV tracks upstream ecosystems only
-│
-├── mitigations[]                ❌  key present but never populated
-├── impacts[]                    ❌  key present but never populated
-├── exploits[]                   ❌  not written
-│
-└── history[]
-    ├── date                     ✅  published (advisory_added) / modified (advisory_updated)
-    ├── event                    ✅  advisory_added / advisory_updated
-    ├── source                   ✅  "osv"
-    └── detail                   ✅  OSV-ID
+cve_record         ❌  CVE List only
+cve_desc           ✅  details prose (en; one row per (cve_id, source))
+cve_cvss           ❌  not written
+cve_cwe            ❌  not written
+cve_ref            ❌  not written
+cve_solution       ❌  not written
+cve_workaround     ❌  not written
+cve_impact         ❌  not written
+cve_alias          ❌  not written
+advisory           ✅  native advisory id / url / title / published / modified
+advisory_cve       ✅  advisory ↔ CVE links (cross-alias filtered via GHSA purl map)
+cve_vendor         ❌  not written
+exploits           ❌
+epss / kev / ssvc  ❌  their own sources
 ```

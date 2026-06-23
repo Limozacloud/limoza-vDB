@@ -1,273 +1,438 @@
--- ── LVE Spine ─────────────────────────────────────────────────────────────────
-CREATE SEQUENCE IF NOT EXISTS lve_seq START 1;
+-- ════════════════════════════════════════════════════════════════════════════
+-- limoza-vDB v2 schema
+--
+-- Design: CVE is the central id — no synthetic LVDB ids. Every source writes
+-- its own table independently (no shared spine row, no lock contention, no
+-- ordering dependency). Two data shapes:
+--
+--   1. CVE-keyed enrichment  (PK = cve_id):  epss, kev, ssvc
+--   2. standalone dictionaries (own key):    cna, cpe, cwe
+-- ════════════════════════════════════════════════════════════════════════════
 
-CREATE TABLE IF NOT EXISTS lve (
-    lve_id      TEXT PRIMARY KEY,
-    aliases     TEXT[] NOT NULL DEFAULT '{}',
-    has_exploit BOOLEAN NOT NULL DEFAULT FALSE,
-    ingested_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- ── ADP dictionary ────────────────────────────────────────────────────────────
+-- Authorized Data Publishers (CISA-ADP, the CVE Program container, …). Unlike
+-- CNAs these aren't in the partner list, but every adp container carries a
+-- providerMetadata {orgId, shortName, dateUpdated}. Collected as a byproduct of
+-- the cvelistv5 scan (distinct by orgId UUID). cve_* source fields reference this
+-- by UUID for ADP-authored rows (logical ref, no FK).
+CREATE TABLE IF NOT EXISTS adp (
+    uuid         TEXT PRIMARY KEY,     -- providerMetadata.orgId
+    short_name   TEXT,
+    last_updated TIMESTAMPTZ,          -- newest providerMetadata.dateUpdated seen
+    first_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_adp_short_name ON adp (short_name);
+
+-- ── Advisories ────────────────────────────────────────────────────────────────
+-- Vendor/distro security bulletins (RHSA, USN, GHSA, …). source = the ISSUER
+-- name (NOT a cna_id — issuers aren't always CNAs, e.g. Debian). One shared
+-- schema across all advisory sources (subfolders under ingest/advisories/).
+-- The issuer's per-CVE enrichment (cvss/cwe/ref/workaround/impact) lands in the
+-- cve_* tables with origin=<source>; only the advisory object + CVE links + the
+-- per-CVE vendor blob live here. Affected/version status = phase 3.
+CREATE TABLE IF NOT EXISTS advisory (
+    source       TEXT NOT NULL,    -- 'redhat'
+    advisory_id  TEXT NOT NULL,    -- 'RHSA-2024:2011'
+    url          TEXT,
+    title        TEXT,             -- not in RedHat VEX → may be NULL
+    severity     TEXT,             -- per-advisory severity (GHSA etc.) → may be NULL
+    published    TIMESTAMPTZ,
+    modified     TIMESTAMPTZ,
+    vendor_data  JSONB,            -- per-advisory source-specific extras
+    PRIMARY KEY (source, advisory_id)
 );
 
-CREATE OR REPLACE FUNCTION lve_assign_id()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.lve_id IS NULL OR NEW.lve_id = '' THEN
-        NEW.lve_id := 'LVDB-' || LPAD(nextval('lve_seq')::TEXT, 8, '0');
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER lve_before_insert
-    BEFORE INSERT ON lve
-    FOR EACH ROW EXECUTE FUNCTION lve_assign_id();
-
-CREATE INDEX IF NOT EXISTS idx_lve_aliases     ON lve USING GIN (aliases);
-CREATE INDEX IF NOT EXISTS idx_lve_has_exploit ON lve (has_exploit) WHERE has_exploit = TRUE;
-
--- ── CVE Data (NVD only) ───────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_cve (
-    lve_id               TEXT PRIMARY KEY REFERENCES lve(lve_id) ON DELETE CASCADE,
-    cve_id               TEXT UNIQUE NOT NULL,
-    status               TEXT CHECK (status IN ('cve_assigned','cve_reserved','cve_pending','cve_rejected')),
-    published            TIMESTAMPTZ,
-    updated              TIMESTAMPTZ,
-    epss_score           DOUBLE PRECISION,
-    epss_percentile      DOUBLE PRECISION,
-    epss_date            DATE,
-    kev_date_added       DATE,
-    kev_due_date         DATE,
-    kev_known_ransomware BOOLEAN,
-    kev_required_action  TEXT,
-    ssvc_exploitation    TEXT CHECK (ssvc_exploitation    IN ('none','poc','active')),
-    ssvc_automatable     TEXT CHECK (ssvc_automatable     IN ('yes','no')),
-    ssvc_technical_impact TEXT CHECK (ssvc_technical_impact IN ('partial','total'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_lve_cve_cve_id ON lve_cve (cve_id);
-
--- ── Titles ────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_titles (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    value        TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS advisory_cve (
     source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, source, advisory_ref)
+    advisory_id  TEXT NOT NULL,
+    cve_id       TEXT NOT NULL,
+    PRIMARY KEY (source, advisory_id, cve_id)
+);
+CREATE INDEX IF NOT EXISTS idx_advisory_cve_cve ON advisory_cve (cve_id);
+
+-- Per-CVE vendor assessment (RedHat severity, Ubuntu priority, …). One row per
+-- (cve, source); everything source-specific (incl. severity) goes in data JSONB,
+-- to be promoted to columns later if needed.
+CREATE TABLE IF NOT EXISTS cve_vendor (
+    cve_id  TEXT NOT NULL,
+    source  TEXT NOT NULL,         -- 'redhat'
+    data    JSONB,                 -- {"severity":"Important", ...}
+    PRIMARY KEY (cve_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_vendor_cve ON cve_vendor (cve_id);
+
+-- ── CVE spine ─────────────────────────────────────────────────────────────────
+-- Thin, shared registry of every known CVE id. Created by ANY source that
+-- mentions a CVE (`ON CONFLICT DO NOTHING`) — nobody owns it. No foreign keys:
+-- cve_id is the only join key, so the CHECK enforces the canonical form
+-- (importers also pass ids through core.cveid.normalize at the boundary).
+-- A cve row with no cve_record = "known to someone, not yet in the CVE List".
+CREATE TABLE IF NOT EXISTS cve (
+    cve_id     TEXT PRIMARY KEY CHECK (cve_id ~ '^CVE-[0-9]{4}-[0-9]+$'),
+    first_seen TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ── Descriptions ──────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_descriptions (
+-- ── CVE record (cvelistV5, 1 row / CVE) ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cve_record (
+    cve_id         TEXT PRIMARY KEY,
+    state          TEXT,                 -- PUBLISHED | REJECTED | RESERVED
+    assigner       TEXT,                 -- CNA short name (→ cna.short_name)
+    date_reserved  TIMESTAMPTZ,
+    date_published TIMESTAMPTZ,
+    date_updated   TIMESTAMPTZ,
+    title          TEXT,
+    exploit_note   TEXT,                 -- CNA prose ("Exploitable with…" / "not aware of…")
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cve_record_assigner ON cve_record (assigner);
+CREATE INDEX IF NOT EXISTS idx_cve_record_published ON cve_record (date_published DESC NULLS LAST);
+
+-- ── CVE info (N / CVE, multi-source) ──────────────────────────────────────────
+-- origin = the importer that wrote the row (delete-scope on re-import);
+-- source = who authored the data (cna | <adp shortname> | nvd | …) for display.
+CREATE TABLE IF NOT EXISTS cve_cvss (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id     TEXT NOT NULL,
+    origin     TEXT NOT NULL,
+    source     TEXT,
+    version    TEXT,                     -- 2.0 | 3.0 | 3.1 | 4.0
+    base_score DOUBLE PRECISION,
+    severity   TEXT,
+    vector     TEXT,
+    UNIQUE (cve_id, origin, source, vector)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_cvss_cve ON cve_cvss (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_cwe (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    cwe_id  TEXT NOT NULL,               -- CWE-79
+    UNIQUE (cve_id, origin, source, cwe_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_cwe_cve ON cve_cwe (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_desc (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, origin, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_desc_cve ON cve_desc (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_ref (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    url     TEXT NOT NULL,
+    type    TEXT,
+    UNIQUE (cve_id, origin, source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_ref_cve ON cve_ref (cve_id);
+
+-- remediation / mitigation prose (same shape as cve_desc; separate tables per
+-- concept so other sources — vendors, distros — slot in via their `source`).
+CREATE TABLE IF NOT EXISTS cve_solution (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, origin, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_solution_cve ON cve_solution (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_workaround (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    lang    TEXT,
+    value   TEXT NOT NULL,
+    UNIQUE (cve_id, origin, source, lang)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_workaround_cve ON cve_workaround (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_impact (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id      TEXT NOT NULL,
+    origin      TEXT NOT NULL,
+    source      TEXT,
+    capec_id    TEXT,                    -- CAPEC-592
+    description TEXT,
+    UNIQUE (cve_id, origin, source, capec_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_impact_cve ON cve_impact (cve_id);
+
+CREATE TABLE IF NOT EXISTS cve_alias (
+    id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id  TEXT NOT NULL,
+    origin  TEXT NOT NULL,
+    source  TEXT,
+    alias   TEXT NOT NULL,              -- GHSA-xxx, JVNDB-…, etc.
+    UNIQUE (cve_id, alias)
+);
+CREATE INDEX IF NOT EXISTS idx_cve_alias_cve   ON cve_alias (cve_id);
+CREATE INDEX IF NOT EXISTS idx_cve_alias_alias ON cve_alias (alias);
+
+-- ── Sync log ──────────────────────────────────────────────────────────────────
+-- One row per sync/ingest run per source. Powers the dashboard's freshness
+-- ("last successful X") and error views. Written by ingest/run.py around every
+-- phase, success or failure.
+--   status      success      = did work / wrote data
+--               no_new_data  = checked, source unchanged (gate) — nothing to do
+--               failed       = raised an error
+--   items       sync phase: entries fetched/indexed (NULL for ingest)
+--   count_before/after  ingest phase: DB rows before/after (NULL for sync);
+--                       delta = count_after - count_before
+--   message     always populated: the reasoning/summary (or the error text)
+CREATE TABLE IF NOT EXISTS sync_log (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    value        TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, source, advisory_ref)
+    source       TEXT NOT NULL,                        -- epss, kev, cpe, ...
+    phase        TEXT NOT NULL CHECK (phase  IN ('sync','ingest')),
+    status       TEXT NOT NULL CHECK (status IN ('success','no_new_data','failed')),
+    items        INTEGER,                              -- sync: entries fetched/indexed
+    count_before INTEGER,                              -- ingest: DB rows before
+    count_after  INTEGER,                              -- ingest: DB rows after
+    message      TEXT,                                 -- reasoning / summary / error
+    started_at   TIMESTAMPTZ NOT NULL,
+    finished_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    duration_ms  INTEGER
 );
 
--- ── CVSS ──────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_cvss (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT             NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    version      TEXT             NOT NULL,
-    score        DOUBLE PRECISION NOT NULL,
-    vector       TEXT             NOT NULL,
-    severity     TEXT             CHECK (severity IN ('critical','high','medium','low','informational')),
-    source       TEXT             NOT NULL,
-    advisory_ref TEXT,
-    product_id   TEXT,
-    UNIQUE (lve_id, vector, source)
+CREATE INDEX IF NOT EXISTS idx_sync_log_source ON sync_log (source, phase, finished_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sync_log_error  ON sync_log (finished_at DESC) WHERE status = 'failed';
+-- "Latest run per (source, phase)" for the dashboard is a query
+-- (DISTINCT ON (source, phase) ... ORDER BY finished_at DESC), not a DB view.
+
+-- ── EPSS ──────────────────────────────────────────────────────────────────────
+-- FIRST EPSS exploit-prediction scores. One row per CVE, full daily snapshot.
+-- Pattern: pure UPSERT — entries are never deleted upstream, only re-scored.
+CREATE TABLE IF NOT EXISTS epss (
+    cve_id     TEXT PRIMARY KEY,
+    score      DOUBLE PRECISION NOT NULL,
+    percentile DOUBLE PRECISION,
+    date       DATE,
+    synced_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_lve_cvss_score ON lve_cvss (score DESC);
+CREATE INDEX IF NOT EXISTS idx_epss_score ON epss (score DESC);
 
--- ── CWEs ──────────────────────────────────────────────────────────────────────
--- Per-LVE weakness references: "this LVE is CWE-NNN, according to source X".
-CREATE TABLE IF NOT EXISTS lve_cwes (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    cwe_id       TEXT NOT NULL,
-    name         TEXT,
-    source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, cwe_id, source)
+-- ── CISA KEV ──────────────────────────────────────────────────────────────────
+-- CISA Known Exploited Vulnerabilities. ~1.6k rows, full snapshot.
+-- Pattern: DELETE + INSERT — CISA can withdraw entries, so the table is rebuilt
+-- to match the source each sync. DELETE (not TRUNCATE) keeps the dashboard
+-- readable during the swap (ROW EXCLUSIVE lock, MVCC old-rows until commit).
+CREATE TABLE IF NOT EXISTS kev (
+    cve_id             TEXT PRIMARY KEY,
+    date_added         DATE,
+    due_date           DATE,
+    known_ransomware   BOOLEAN,
+    required_action    TEXT,
+    vendor_project     TEXT,
+    product            TEXT,
+    vulnerability_name TEXT,
+    short_description  TEXT,
+    notes              TEXT,
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ── CWE Dictionary ─────────────────────────────────────────────────────────────
--- Shared weakness definitions (one row per CWE, ~940 total), enriched from the
--- CWE-CAPEC json_repo/W/*.json clone. Populated on-reference: whenever an
--- lve_cwes row is written, the full definition for that cwe_id is upserted here.
--- lve_cwes.cwe_id references this loosely — NO foreign key, because sources may
--- cite CWE ids absent from the synced Weakness set (categories, CWE-NVD-noinfo).
--- The rich fields exist so an LLM can author mitigation guidance from the DB alone.
+CREATE INDEX IF NOT EXISTS idx_kev_date_added ON kev (date_added DESC);
+
+-- ── CISA SSVC ─────────────────────────────────────────────────────────────────
+-- CISA SSVC decision points (from cisagov/vulnrichment). Subset of CVEs.
+-- Pattern: DELETE + INSERT (ROW EXCLUSIVE, dashboard stays readable during swap).
+CREATE TABLE IF NOT EXISTS ssvc (
+    cve_id           TEXT PRIMARY KEY,
+    exploitation     TEXT CHECK (exploitation     IN ('none','poc','active')),
+    automatable      TEXT CHECK (automatable      IN ('yes','no')),
+    technical_impact TEXT CHECK (technical_impact IN ('partial','total')),
+    synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── CNA dictionary ────────────────────────────────────────────────────────────
+-- CVE Numbering Authorities (CVEProject/cve-website CNAsList.json). ~520 rows.
+-- Pattern: UPSERT + SOFT sweep — advisories reference cna.short_name, so a CNA
+-- dropped from the list is marked active=false, never hard-deleted.
+CREATE TABLE IF NOT EXISTS cna (
+    short_name        TEXT PRIMARY KEY,
+    cna_id            TEXT,
+    organization_name TEXT,
+    scope             TEXT,
+    advisory_url      TEXT,
+    aliases           TEXT[],            -- record-shortName variants → this CNA (from cna_mapping.json)
+    uuids             TEXT[],            -- all providerMetadata.orgIds seen (from corpus) → cve_* source join
+    advisory_patterns JSONB,             -- [{pattern,template}] → L2 upstream-advisory match/construct (derived + override)
+    active            BOOLEAN NOT NULL DEFAULT TRUE,
+    synced_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cna_cna_id  ON cna (cna_id);
+CREATE INDEX IF NOT EXISTS idx_cna_uuids   ON cna USING GIN (uuids);
+CREATE INDEX IF NOT EXISTS idx_cna_aliases ON cna USING GIN (aliases);
+
+-- ── CPE dictionary ────────────────────────────────────────────────────────────
+-- NVD CPE 2.3 dictionary (~1.7M entries). Pattern: UPSERT — entries are
+-- deprecated (deprecated=true), never deleted.
+CREATE TABLE IF NOT EXISTS cpe (
+    cpe_name_id  TEXT        PRIMARY KEY,
+    cpe_uri      TEXT        NOT NULL,
+    type         TEXT,                    -- 'a' application, 'o' OS, 'h' hardware
+    vendor       TEXT,
+    product      TEXT,
+    version      TEXT,
+    title_en     TEXT,
+    deprecated   BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ,
+    modified_at  TIMESTAMPTZ,
+    ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cpe_vendor_product ON cpe (vendor, product);
+CREATE INDEX IF NOT EXISTS idx_cpe_type           ON cpe (type);
+
+-- ── CWE dictionary ────────────────────────────────────────────────────────────
+-- CWE weakness definitions (CWE-CAPEC json_repo/W). ~940 rows. Pattern: UPSERT —
+-- weaknesses are deprecated/obsoleted, never deleted.
 CREATE TABLE IF NOT EXISTS cwe (
     cwe_id                  TEXT PRIMARY KEY,        -- "CWE-79"
-    name                    TEXT,                    -- weakness name
+    name                    TEXT,
     abstraction             TEXT,                    -- Base / Variant / Class / Pillar
-    description             TEXT,                    -- short Description
-    extended_description    TEXT,                    -- ExtendedDescription
-    likelihood_of_exploit   TEXT,                    -- High / Medium / Low
-    common_consequences     JSONB,                   -- [{scope[], impact[], note}]
-    potential_mitigations   JSONB,                   -- [{phase[], strategy, description, effectiveness}]
-    modes_of_introduction   JSONB,                   -- [{phase, note}]
-    detection_methods       JSONB,                   -- [{method, description, effectiveness}]
-    related_attack_patterns JSONB,                   -- ["CAPEC-63", ...]
-    related_weaknesses      JSONB,                   -- [{nature, cwe_id, view_id}]
+    description             TEXT,
+    extended_description    TEXT,
+    likelihood_of_exploit   TEXT,
+    common_consequences     JSONB,
+    potential_mitigations   JSONB,
+    modes_of_introduction   JSONB,
+    detection_methods       JSONB,
+    related_attack_patterns JSONB,
+    related_weaknesses      JSONB,
     synced_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ── References ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_references (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    url          TEXT NOT NULL,
-    type         TEXT NOT NULL,
-    source       TEXT,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, url, source)
-);
-
--- ── Advisories ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_advisories (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    advisory_id  TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    url          TEXT,
-    published    TIMESTAMPTZ,
-    updated      TIMESTAMPTZ,
-    vendor_data  JSONB,
-    UNIQUE (lve_id, advisory_id)
-);
-
--- ── Upstream projects ─────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_upstream (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    upstream_id  TEXT NOT NULL,
-    purl         TEXT NOT NULL,
-    fix_version  TEXT,
-    fix_commit   TEXT,
-    ranges       JSONB,
-    versions     TEXT[],
-    source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, upstream_id)
-);
-
--- ── Packages ──────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_packages (
-    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id            TEXT    NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    name              TEXT,
-    purl              TEXT    NOT NULL,
-    affected_state    TEXT    NOT NULL DEFAULT 'unknown'
-                          CHECK (affected_state IN ('affected','not_affected','not_applicable','unknown')),
-    remediation_state TEXT    NOT NULL DEFAULT 'unknown'
-                          CHECK (remediation_state IN ('fixed','will_not_fix','pending','none','unknown')),
-    status_raw        TEXT,
-    vex_justification TEXT    CHECK (vex_justification IN (
-                          'component_not_present',
-                          'vulnerable_code_not_present',
-                          'vulnerable_code_not_in_execute_path',
-                          'vulnerable_code_cannot_be_controlled_by_adversary',
-                          'inline_mitigations_already_exist'
-                      )),
-    ranges            JSONB,
-    source            TEXT    NOT NULL,
-    advisory_ref      TEXT,
-    upstream_ref      TEXT,
-    severity          TEXT    CHECK (severity IN ('critical','high','medium','low','informational')),
-    vendor_data       JSONB,
-    UNIQUE (lve_id, purl, source)
-);
-
-CREATE INDEX IF NOT EXISTS idx_lve_packages_purl              ON lve_packages (purl);
-CREATE INDEX IF NOT EXISTS idx_lve_packages_affected_state    ON lve_packages (affected_state);
-CREATE INDEX IF NOT EXISTS idx_lve_packages_remediation_state ON lve_packages (remediation_state);
-
--- ── Mitigations ──────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_mitigations (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    value        TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    purls        TEXT[],
-    UNIQUE (lve_id, source, advisory_ref)
-);
-
--- ── Impacts ───────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_impacts (
-    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id       TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    value        TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    advisory_ref TEXT,
-    UNIQUE (lve_id, source, advisory_ref)
-);
-
 -- ── Exploits ──────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_exploits (
-    id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id    TEXT NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    source    TEXT NOT NULL,
-    source_id TEXT,
-    name      TEXT,
-    url       TEXT NOT NULL,
-    metadata  JSONB,
-    UNIQUE (lve_id, url)
-);
-
--- ── Notices ───────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS notices (
+-- Exploit intelligence from 4 homogeneous sources (exploitdb, metasploit, nuclei,
+-- poc_github), keyed by CVE. Identical shape across sources → one table with a
+-- `source` column. Per-source extras (verified, rank, severity, stars …) live in
+-- metadata. Pattern: per source DELETE WHERE source=X + INSERT (dashboard-safe).
+-- "has this CVE an exploit?" = EXISTS (SELECT 1 FROM exploits WHERE cve_id = ...).
+CREATE TABLE IF NOT EXISTS exploits (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    handled_at TIMESTAMPTZ,
-    type       TEXT NOT NULL,
-    source     TEXT NOT NULL,
-    message    TEXT NOT NULL,
-    metadata   JSONB,
-    UNIQUE (type, source, message)
+    cve_id     TEXT NOT NULL,
+    source     TEXT NOT NULL,        -- exploitdb | metasploit | nuclei | poc_github
+    source_id  TEXT,                 -- EDB id / msf module / repo full_name / template id
+    name       TEXT,
+    url        TEXT NOT NULL,
+    metadata   JSONB,                -- per-source extras
+    synced_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (cve_id, source, url)     -- one PoC can map to several CVEs → cve_id in key
 );
 
-CREATE INDEX IF NOT EXISTS idx_notices_unhandled ON notices (created_at DESC) WHERE handled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_exploits_cve    ON exploits (cve_id);
+CREATE INDEX IF NOT EXISTS idx_exploits_source ON exploits (source);
 
--- ── History ───────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS lve_history (
-    id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lve_id    TEXT        NOT NULL REFERENCES lve(lve_id) ON DELETE CASCADE,
-    date      TIMESTAMPTZ NOT NULL,
-    event     TEXT        NOT NULL,
-    source    TEXT        NOT NULL,
-    detail    TEXT
+-- ── Per-source URL templates (SQL-accessible mirror of source_urls.json) ──────
+-- Seeded by `vdb ingest source_urls` from ingest/advisories/source_urls.json (the
+-- editable single source of truth). cve_levels() JOINs this so the function needs
+-- no hardcoded URLs. {cve} placeholder.
+CREATE TABLE IF NOT EXISTS source_url (
+    source         TEXT PRIMARY KEY,
+    cve_url        TEXT,
+    advisory_url   TEXT,
+    when_id_prefix TEXT
 );
 
--- detail is part of the key so per-advisory / per-package events that share the
--- same (date, event, source) — e.g. several advisory_added rows from one import —
--- coexist instead of colliding. COALESCE keeps NULL-detail events idempotent
--- (a bare nullable column would be treated as NULLS DISTINCT).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lve_history_unique ON lve_history (lve_id, date, event, source, COALESCE(detail, ''));
-CREATE INDEX IF NOT EXISTS idx_lve_history_lve_id ON lve_history (lve_id, date DESC);
+-- ── L4: affected version status (OSV-shaped, two coordinates + VEX status) ─────
+-- Derived by `vdb affected` (a central post-pass over the synced/ingested sources).
+-- One row per (cve, package, release): the affected range (introduced / fixed /
+-- last_affected) plus a canonical `status` that drives the matcher; `status_raw`
+-- keeps the source's original wording. coord='purl' for managed/ecosystem software,
+-- coord='cpe' for unmanaged/binaries. origin = the extractor (delete-scope unit).
+CREATE TABLE IF NOT EXISTS affected (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id         TEXT NOT NULL,
+    coord          TEXT NOT NULL CHECK (coord IN ('purl','cpe')),
+    ecosystem      TEXT,
+    package        TEXT,
+    purl           TEXT,
+    cpe23          TEXT,
+    release        TEXT,
+    introduced     TEXT,
+    fixed          TEXT,
+    last_affected  TEXT,
+    version_scheme TEXT,
+    status         TEXT NOT NULL CHECK (status IN
+                     ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
+    status_raw     TEXT,
+    justification  TEXT,
+    source         TEXT NOT NULL,
+    status_source  TEXT NOT NULL DEFAULT 'own',
+    origin         TEXT NOT NULL,
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_affected_cve  ON affected (cve_id);
+CREATE INDEX IF NOT EXISTS idx_affected_purl ON affected (purl);
+CREATE INDEX IF NOT EXISTS idx_affected_cpe  ON affected (cpe23);
+CREATE INDEX IF NOT EXISTS idx_affected_pkg  ON affected (ecosystem, package);
 
--- ── Migrations ────────────────────────────────────────────────────────────────
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS affected_state TEXT NOT NULL DEFAULT 'unknown'
-    CHECK (affected_state IN ('affected','not_affected','not_applicable','unknown'));
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS remediation_state TEXT NOT NULL DEFAULT 'unknown'
-    CHECK (remediation_state IN ('fixed','will_not_fix','pending','none','unknown'));
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS status_raw TEXT;
-ALTER TABLE lve_packages ADD COLUMN IF NOT EXISTS vex_justification TEXT
-    CHECK (vex_justification IN (
-        'component_not_present','vulnerable_code_not_present',
-        'vulnerable_code_not_in_execute_path',
-        'vulnerable_code_cannot_be_controlled_by_adversary',
-        'inline_mitigations_already_exist'
-    ));
-DO $$ BEGIN ALTER TABLE lve_packages DROP COLUMN fix_status;
-EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DROP INDEX IF EXISTS idx_lve_packages_fix_status;
-ALTER TABLE lve_upstream ADD COLUMN IF NOT EXISTS versions TEXT[];
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS field; EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS old_value; EXCEPTION WHEN undefined_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE lve_history DROP COLUMN IF EXISTS new_value; EXCEPTION WHEN undefined_column THEN NULL; END $$;
+-- ── L1–L3 advisory tiering (dashboard) ────────────────────────────────────────
+-- cve_levels(cve) returns the tiered advisory view for one CVE:
+--   L1 CNA        = assigner (cve_record → cna)
+--   L2 Upstream   = dedicated-CNA product advisory (cna.advisory_patterns vs cve_ref)
+--                   · ecosystem GHSA (imported)  · GHSA-ref fallback (unreviewed)
+--   L3 Downstream = formal advisories (distros + ecosystem-natives)  · distro tracking (cve_vendor.cve_url)
+-- cve_level is just the SETOF return shape (tracked in Hasura → GraphQL: cve_levels(args:{p_cve})).
+--   tracked_only = true → distro only assessed it (cve_vendor), no formal bulletin.
+CREATE TABLE IF NOT EXISTS cve_level (
+    cve_id text, lvl text, source text, url text, tracked_only boolean
+);
+
+CREATE OR REPLACE FUNCTION cve_levels(p_cve text)
+RETURNS SETOF cve_level
+LANGUAGE sql STABLE AS $fn$
+  SELECT rec.cve_id, 'L1 CNA', c.short_name, c.advisory_url, false
+  FROM cve_record rec JOIN cna c ON c.cna_id = rec.assigner
+  WHERE rec.cve_id = p_cve
+  UNION
+  SELECT rec.cve_id, 'L2 Upstream', c.short_name, r.url, false
+  FROM cve_record rec JOIN cna c ON c.cna_id = rec.assigner
+  JOIN LATERAL jsonb_array_elements(COALESCE(c.advisory_patterns,'[]'::jsonb)) p ON true
+  JOIN cve_ref r ON r.cve_id = rec.cve_id AND r.origin='cvelistv5'
+                AND r.url LIKE '%'||(p->>'pattern')||'%'
+  WHERE rec.cve_id = p_cve
+  UNION
+  SELECT p_cve, 'L2 Upstream',
+     COALESCE((SELECT split_part(p2->>'purl','/',2) FROM cve_vendor v2,
+               jsonb_array_elements(v2.data->'packages') p2
+               WHERE v2.cve_id=p_cve AND v2.source='ghsa' LIMIT 1), 'ghsa'),
+     a.url, false
+  FROM advisory_cve ac JOIN advisory a USING (source, advisory_id)
+  WHERE ac.cve_id = p_cve AND a.source='ghsa'
+  UNION
+  SELECT p_cve, 'L2 Upstream', split_part(r.url,'/',4)||'/'||split_part(r.url,'/',5), r.url, false
+  FROM cve_ref r
+  WHERE r.cve_id = p_cve AND r.origin='cvelistv5'
+    AND r.url LIKE '%github.com/%/security/advisories/GHSA-%'
+    AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source='ghsa')
+  UNION
+  -- L3 formal advisories; if a source has human pages only for some ids (when_id_prefix)
+  -- and this id isn't one (e.g. openSUSE-SU), fall back to its per-CVE page (cve_url).
+  SELECT p_cve, 'L3 Downstream', a.source,
+         CASE WHEN su.when_id_prefix IS NOT NULL AND a.advisory_id NOT LIKE su.when_id_prefix || '%'
+              THEN replace(su.cve_url, '{cve}', p_cve)
+              ELSE a.url END,
+         false
+  FROM advisory_cve ac JOIN advisory a USING (source, advisory_id)
+  LEFT JOIN source_url su ON su.source = a.source
+  WHERE ac.cve_id = p_cve AND a.source <> 'ghsa'
+  UNION
+  SELECT p_cve, 'L3 Downstream', v.source, replace(s.cve_url, '{cve}', p_cve), true
+  FROM cve_vendor v JOIN source_url s ON s.source = v.source
+  WHERE v.cve_id = p_cve AND s.cve_url IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
+$fn$;

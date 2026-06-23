@@ -20,3 +20,8 @@ _*.md
 TODO.md
 .*/
 !.github/
+
+# v2 local dev
+.venv/
+_data/
+PLAN.md

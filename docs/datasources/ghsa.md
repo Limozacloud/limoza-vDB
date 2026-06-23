@@ -1,148 +1,144 @@
-# GHSA (GitHub Security Advisories)
+# GitHub Security Advisories (GHSA)
 
-GHSA is the primary source for **language-ecosystem** fixes (npm, PyPI, Go, Maven,
-crates.io, NuGet, RubyGems, and more). It is distributed in OSV format. Affected
-packages and fix versions are written to `upstream[]` (not `packages[]`), keyed by
-ecosystem PURL.
+GHSA is the **L2 ecosystem upstream advisory** source. It is the GitHub Security
+Advisory Database, distributed in OSV format. For any CVE that affects a language
+ecosystem package (npm, PyPI, Go, Maven, crates.io, NuGet, RubyGems, …), the GHSA
+record is the upstream advisory issued by the ecosystem maintainer — the same role
+that an RHSA plays for Red Hat packages. Advisories without a CVE alias are skipped;
+the database is CVE-centric.
+
+GHSA contributes the richest ecosystem-level enrichment: CVSS, CWE, a full
+description, and the set of affected package PURLs with version ranges. The PURLs are
+written to `cve_vendor.data` as a phase-2 staging area pending the phase-3 affected
+table.
 
 ## github/advisory-database
+
 - **URL:** `https://github.com/github/advisory-database`
 - **Official:** Yes — GitHub-maintained
 - **Format:** OSV (JSON), one advisory per file
-- **Local path:** `advisories/github-reviewed/<year>/<id>/GHSA-*.json` and `advisories/unreviewed/<year>/<id>/GHSA-*.json`
+- **Local path:** `{ghsa}/advisories/github-reviewed/<year>/<id>/GHSA-*.json`
 - **License:** CC BY 4.0
-- **Sync:** shallow `git clone --depth=1` on first run, `git pull --ff-only` afterwards. Both `github-reviewed` and `unreviewed` subtrees are ingested.
-- **Content:** advisories for ecosystem packages with affected version ranges, upstream fix versions, CVSS, CWE, and references. Each record requires a CVE alias to be ingested.
+- **Sync:** sparse `git clone --depth=1 --filter=blob:none` on first run; `git pull --ff-only` afterwards. Only the `advisories/github-reviewed` subtree is checked out and ingested.
+- **Content:** human-reviewed advisories for ecosystem packages with CVSS scores, CWE ids, a full markdown description, and affected package PURLs with version ranges.
 
 ```
 osv/
-├── id                                  ✅ → aliases[] (GHSA-ID) + advisories[].@id
+├── id                                  ✅ → advisory.advisory_id (GHSA-ID)
+│                                           + advisory.url  (https://github.com/advisories/{id})
 ├── withdrawn                           ✅ → record skipped entirely if present
 ├── aliases[]/
-│   └── [CVE-*]                         ✅ → cve.cve_id (first) + aliases[]  (no CVE alias ⇒ skipped)
-├── summary                             ✅ → titles[].value + descriptions[].value (fallback)
-├── details                             ✅ → descriptions[].value (preferred over summary)
-├── published                           ✅ → advisories[].published
-├── modified                            ✅ → advisories[].updated
-├── severity[]/                         (CVSS vectors)
-│   ├── type (CVSS_V4/V3/V2)            ✅ → cvss[].version (4.0/3.1/2.0)
-│   └── score (vector string)           ✅ → cvss[].vector
+│   └── [CVE-*]                         ✅ → cve spine (cve.cve_id) + advisory_cve.cve_id
+│                                           (no CVE alias → record skipped)
+├── summary                             ✅ → advisory.title
+├── details                             ✅ → cve_desc.value  (preferred; falls back to summary if blank)
 ├── database_specific/
-│   ├── cvss                            ✅ → cvss[].score   (numeric; entry skipped if absent/non-numeric)
-│   ├── severity                        ✅ → cvss[].severity (mapped)
-│   ├── cwe_ids[]                       ✅ → cwes[].id  (CWE-* only)
-│   └── github_reviewed                 ✅ → advisories[].vendor_data.github_reviewed
-├── references[]/
-│   ├── url                             ✅ → references[].url
-│   └── type                            ✅ → references[].type  (mapped, else "web")
+│   └── severity                        ✅ → advisory.severity  (CRITICAL/HIGH/MODERATE/LOW/null)
+├── published                           ✅ → advisory.published
+├── modified                            ✅ → advisory.modified
+├── severity[]/
+│   ├── type (CVSS_V4/V3/V2)            ✅ → cve_cvss.version (4.0 / 3.1 / 2.0)
+│   └── score (vector string)           ✅ → cve_cvss.vector + cve_cvss.{base_score, severity}
+│                                           (v2 and v4 vectors: score_from_vector returns None → skipped)
+├── database_specific/
+│   └── cwe_ids[]                       ✅ → cve_cwe.cwe_id  (CWE-* only)
 └── affected[]/
     ├── package/
-    │   ├── ecosystem                   ✅ → upstream[].purl (ecosystem mapping)
-    │   └── name                        ✅ → upstream[].purl
-    ├── ranges[]/
-    │   ├── [type=ECOSYSTEM|SEMVER]
-    │   │   └── events[introduced|fixed|last_affected]  ✅ → upstream[].ranges[] + upstream[].fix_version
-    │   └── [type=GIT].events[fixed]    ✅ → upstream[].fix_commit
-    ├── versions[]                      ✅ → upstream[].versions
-    └── database_specific/              ✗  (e.g. last_known_affected_version_range not used)
-```
+    │   ├── purl                        ✅ → cve_vendor.data.packages[].purl  (used verbatim if present)
+    │   ├── ecosystem                   ✅ → cve_vendor.data.packages[].purl  (mapped when no purl field)
+    │   └── name                        ✅ → cve_vendor.data.packages[].purl
+    └── ranges[]/
+        └── events[introduced|fixed|last_affected]  ✅ → cve_vendor.data.packages[].ranges (compact string)
 
 Legend: ✅ imported  ✗ not imported
+```
 
 ## PURL
 
-GHSA emits **ecosystem PURLs** on `upstream[]`, derived from
-`affected[].package.ecosystem` + `name`. An unmapped ecosystem yields no PURL and the
-affected entry is dropped.
+GHSA emits **ecosystem PURLs** derived from `affected[].package.ecosystem` + `name`.
+If the source record already supplies a `package.purl` field it is used verbatim.
+An unmapped ecosystem with no purl hint yields no PURL and that affected entry is
+dropped from the package list.
 
-| GHSA ecosystem | PURL produced |
+| GHSA ecosystem | PURL type |
 |---|---|
-| `npm` | `pkg:npm/<name>` (scoped `@scope/pkg` → `pkg:npm/%40scope/pkg`) |
-| `PyPI` | `pkg:pypi/<name>` (lowercased, `-` → `_`) |
-| `Go` | `pkg:golang/<module>` |
-| `Maven` | `pkg:maven/<group>/<artifact>` (splits on `:` or `/`) |
-| `RubyGems` / `Ruby` | `pkg:gem/<name>` |
+| `PyPI` | `pkg:pypi/<name>` (lowercased) |
+| `npm` | `pkg:npm/<name>` |
+| `Go` | `pkg:golang/<name>` |
+| `Maven` | `pkg:maven/<name>` |
+| `RubyGems` | `pkg:gem/<name>` |
+| `crates.io` | `pkg:cargo/<name>` |
 | `NuGet` | `pkg:nuget/<name>` |
-| `crates.io` / `Cargo` | `pkg:cargo/<name>` |
-| `Packagist` / `Composer` | `pkg:composer/<name>` |
-| `Hex` | `pkg:hex/<name>` |
+| `Packagist` | `pkg:composer/<name>` |
 | `Pub` | `pkg:pub/<name>` |
-| `GitHub Actions` | `pkg:githubactions/<name>` |
-| `Swift` | `pkg:swift/<name>` |
-| `Erlang` | `pkg:hex/<name>` |
+| `Hex` | `pkg:hex/<name>` |
+| `Hackage` | `pkg:hackage/<name>` |
+| `SwiftURL` | `pkg:swift/<name>` |
+| `Bitnami` | `pkg:bitnami/<name>` |
+| `GitHub Actions` | `pkg:github/<name>` |
 | (any other) | none — entry skipped |
 
-The PURL is a package identity (no version). Affected/fixed versions live in
-`upstream[].ranges[]` (introduced/fixed/last_affected), `upstream[].fix_version`
-(latest fixed), `upstream[].fix_commit` (from GIT ranges), and the explicit
-`upstream[].versions[]` list.
+These PURLs are package identities (no version). Version ranges from `affected[].ranges[]`
+are compacted into a human-readable string (`>=introduced <fixed` / `<=last_affected`)
+and stored alongside the purl in `cve_vendor.data.packages[].ranges`. Full version
+range semantics belong to the phase-3 affected table.
 
-## State mapping
+## cve_vendor layout
 
-GHSA writes to `upstream[]`, not `packages[]`, and does not emit
-`affected_state` / `remediation_state`. Affected status is implicit in the version
-ranges: `introduced: "0"` with a `fixed` bound means every version below the fix is
-affected; a `last_affected` event marks the last affected version where no fix exists.
+Each CVE that appears in at least one GHSA record gets one `cve_vendor` row with
+`source = 'ghsa'`:
 
-CVSS severity is mapped `CRITICAL→critical`, `HIGH→high`, `MEDIUM→medium`,
-`LOW→low`, `NONE→informational`. Reference types map
-`ADVISORY→advisory`; `FIX`/`GIT→patch`; `REPORT→report`; `ARTICLE→article`;
-`WEB`/`PACKAGE`/`EVIDENCE`/`DETECTION→web`; unmapped → `web`.
+```json
+{
+  "packages": [
+    { "purl": "pkg:pypi/pillow", "ranges": ">=9.0.0 <9.0.1" },
+    { "purl": "pkg:pypi/pillow", "ranges": ">=8.0.0 <8.3.2" }
+  ],
+  "ghsa": ["GHSA-xxxx-yyyy-zzzz"]
+}
+```
+
+`packages` is deduplicated by `(purl, ranges)` across all GHSA advisories that
+reference the same CVE. `ghsa` is the list of GHSA ids that contributed to this CVE.
+
+The `cve_levels()` function uses the first purl in `cve_vendor.data.packages` to label
+the L2 upstream advisory with the ecosystem package name.
 
 ## Notes
-- A record is **skipped** if it is `withdrawn`, has no `id`, or carries no `CVE-*` alias. GHSA-only advisories without a CVE are not ingested.
-- `github_reviewed` distinguishes human-curated advisories from auto-imported NVD entries; it is preserved in `advisories[].vendor_data.github_reviewed`. Unreviewed advisories often lack package-level data.
-- Duplicate `affected[]` entries for the same `(ecosystem, name)` are merged: ranges are concatenated and `fix_version` / `versions` updated.
-- `cve.cve_id` is the only `cve{}` field GHSA writes — it never sets the `cve{}` spine (status/published/updated); that comes from NVD.
-- CVSS is only inserted when `database_specific.cvss` is a parseable numeric score, even if a vector string is present.
-- The transform never writes `packages[]`, `mitigations[]`, `impacts[]`, `exploits[]`, or `history[]`.
+
+- **`origin` and `source` are both `"ghsa"`.** The `source` column in `cve_cvss` /
+  `cve_cwe` / `cve_desc` enrichment rows is set to GitHub's CNA UUID (looked up via
+  `cna.short_name = 'github_m'`); `origin` is the literal string `"ghsa"`.
+- **One `cve_desc` row per CVE**, written from `details` (markdown). When multiple
+  GHSA advisories cover the same CVE, only the first encountered is written
+  (`seen_desc` deduplication by `cve_id`).
+- **CVSS** is written only when `score_from_vector` can parse a numeric score from
+  the vector string. v2 and v4 vectors return `(None, None)` and are skipped.
+  Duplicate `(cve_id, vector)` pairs across advisories are dropped.
+- **Unreviewed advisories** (`advisories/unreviewed/`) are **not** ingested — only
+  `github-reviewed` is in the sparse checkout.
+- **GHSA-only advisories** (no `CVE-*` alias) are skipped. The database is CVE-centric.
+- GHSA is the **L2 upstream advisory** in the [advisory tier](../advisory-tiers.md)
+  model. OSV native ecosystem DBs (PYSEC, GO, RUSTSEC, EEF, DRUPAL) are L3 downstream
+  and handled by the [OSV importer](osv.md).
 
 ---
 
-## Schema Coverage
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [GHSA-ID] + CVE-* aliases
-├── has_exploit                  ❌  not written — no exploit data
-│
-├── cve{}
-│   ├── cve_id                   ✅  first CVE-* alias  (seed only — spine not set)
-│   ├── status                   ❌  NVD only
-│   ├── published               ❌  NVD only
-│   ├── updated                 ❌  NVD only
-│   ├── epss{}                   ❌  EPSS vendor
-│   ├── kev{}                    ❌  CISA-KEV vendor
-│   └── ssvc{}                   ❌  CISA-SSVC vendor
-│
-├── titles[]                     ✅  summary
-├── descriptions[]              ✅  details (or summary fallback)
-├── cvss[]                       ✅  severity[].score (vector) + database_specific.cvss/severity
-├── cwes[]                       ✅  database_specific.cwe_ids (CWE-* only); name = null
-├── references[]                 ✅  references[].url + mapped type
-│
-├── advisories[]
-│   ├── @id                      ✅  GHSA-ID
-│   ├── url                      ✅  https://github.com/advisories/<GHSA-ID>
-│   ├── published               ✅  published
-│   ├── updated                 ✅  modified
-│   └── vendor_data             ✅  {"github_reviewed": bool}
-│
-├── upstream[]
-│   ├── @id                      ✅  <GHSA-ID>:<ecosystem>:<name>
-│   ├── purl                     ✅  ecosystem PURL (see PURL section)
-│   ├── fix_version             ✅  latest fixed version from ECOSYSTEM/SEMVER ranges
-│   ├── fix_commit              ✅  first fixed commit from GIT ranges
-│   ├── ranges[]                ✅  {introduced, fixed, last_affected}
-│   ├── versions[]              ✅  affected[].versions
-│   ├── source                  ✅  "ghsa"
-│   └── advisory_ref            ✅  GHSA-ID
-│
-├── packages[]                   ❌  not written — GHSA tracks upstream ecosystems only
-│
-├── mitigations[]                ❌  not written
-├── impacts[]                    ❌  not written
-├── exploits[]                   ❌  not written
-│
-└── history[]                    ❌  not written
+cve_record         ❌  CVE List only
+cve_desc           ✅  details (or summary fallback; en; one row per CVE)
+cve_cvss           ✅  severity[].{type, score}  (parsed vector + derived score)
+cve_cwe            ✅  database_specific.cwe_ids[]
+cve_ref            ❌  not written
+cve_solution       ❌  not written
+cve_workaround     ❌  not written
+cve_impact         ❌  not written
+cve_alias          ❌  not written
+advisory           ✅  GHSA-ID / url / title / severity / published / modified
+advisory_cve       ✅  GHSA-ID ↔ CVE links (one row per CVE per advisory)
+cve_vendor         ✅  {"packages": [{purl, ranges}], "ghsa": [GHSA-IDs]}
+exploits           ❌
+epss / kev / ssvc  ❌  their own sources
 ```

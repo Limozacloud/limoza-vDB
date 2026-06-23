@@ -16,5 +16,8 @@ WORKDIR /app
 COPY schema.sql .
 COPY ingest/ ./ingest/
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown -R ingest:ingest /app
+RUN chmod +x /entrypoint.sh && chown -R ingest:ingest /app \
+    && printf '#!/bin/sh\nexec gosu ingest python -m ingest.run "$@"\n' > /usr/local/bin/vdb \
+    && printf '#!/bin/sh\nexec gosu ingest python -m ingest.run import "$@"\n' > /usr/local/bin/import \
+    && chmod +x /usr/local/bin/vdb /usr/local/bin/import
 ENTRYPOINT ["/entrypoint.sh"]

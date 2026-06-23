@@ -1,50 +1,45 @@
 # Docker stack
 
-limoza-vDB ships as a Docker Compose stack. Everything — the database, the ingest CLI,
-and the GraphQL API — runs in containers, so the only host requirements are **Docker**
-and **Docker Compose**.
+limoza-vDB ships as a Docker Compose stack. Everything — the database, the ingest
+CLI, and the GraphQL API — runs in containers, so the only host requirements are
+**Docker** and **Docker Compose**.
 
 The repository ships two reference compose files: **`docker-compose.dev.yml`** (local
-development — exposed ports, pgAdmin, the ofelia scheduler) and
-**`docker-compose.prod.yml`** (hardened). The plain `docker-compose.yml` name is
-git-ignored, so you can copy a reference to it and customize freely without it being
-tracked:
+development — exposed ports, pgAdmin, the scheduler) and **`docker-compose.prod.yml`**
+(hardened — TLS via Traefik, no exposed database, console disabled). Copy one to the
+default name and customize freely:
 
 ```bash
-cp docker-compose.dev.yml docker-compose.yml   # then `docker compose ...` just works
+cp docker-compose.dev.yml docker-compose.yml   # then `docker compose …` just works
 ```
-
-The examples below use the default file name; if you skip the copy, pass
-`-f docker-compose.dev.yml` to each command instead.
 
 ## Services
 
-`docker-compose.dev.yml` defines five services:
+| Service | Role | Exposed (dev) |
+|---------|------|---------------|
+| `postgres` | The database | `127.0.0.1:5432` |
+| `ingest` | The sync/ingest CLI (one idle container, see below) | — |
+| `hasura` | Serves the schema as a read-only GraphQL API | `8080` |
+| `ofelia` | Cron scheduler that runs the sync/ingest pipeline | — |
+| `pgadmin` | Database UI (development convenience) | `5050` |
+| `traefik` | Reverse proxy / TLS termination (production) | `80`/`443` |
+| `mcp` | Optional [MCP server](mcp.md) for LLM clients | `8765` |
 
-| Service | Image | Role | Exposed |
-|---------|-------|------|---------|
-| `postgres` | `postgres:16-alpine` | The database — stores the normalized LVE records | `127.0.0.1:5432` |
-| `ingest` | built from `Dockerfile` | The Python sync/import CLI (one-shot, see below) | — |
-| `hasura` | GraphQL Engine | Serves the schema as a read-only GraphQL API | `8080` |
-| `pgadmin` | `dpage/pgadmin4` | Database UI (development convenience) | `5050` |
-| `ofelia` | `mcuadros/ofelia` | Cron scheduler that runs the sync/import pipelines | — |
-
-The `ingest` service is **not** a long-running daemon — it sits behind a Compose
-[profile](https://docs.docker.com/compose/profiles/) (`profiles: [ingest]`) so it never
-starts with `docker compose up`. You invoke it on demand with `docker compose run`
-(see [Ingest CLI](cli.md)).
+The `ingest` service runs continuously as an idle process (`sleep infinity`) so that
+`docker compose exec` and the scheduler can run commands inside it without spawning
+throwaway containers. It consumes no CPU and minimal RAM while idle.
 
 ## Data persistence
 
-Each source downloads into its own named volume mounted under `/data/<source>` inside
-the `ingest` container (e.g. `/data/redhat`, `/data/nvd`, `/data/ghsa`). These volumes
-survive container restarts, so a re-`sync` only fetches incremental changes rather than
-re-downloading everything. The database lives in the `postgres_data` volume.
+Each source downloads into a named volume mounted under `/data/<source>` inside the
+`ingest` container (e.g. `/data/cvelistv5`, `/data/redhat`, `/data/ghsa`). These
+volumes survive restarts, so a re-`sync` only fetches incremental changes. The
+database lives in the `postgres_data` volume.
 
 ## First-run setup
 
 ```bash
-# 1. Pick a compose file (copy a reference to the default name, or use -f)
+# 1. Pick a compose file
 cp docker-compose.dev.yml docker-compose.yml
 
 # 2. Configure environment
@@ -52,22 +47,22 @@ cp .env.template .env
 # Edit .env and set at least:
 #   POSTGRES_PASSWORD     — database password
 #   HASURA_ADMIN_SECRET   — admin secret for Hasura
-#   NVD_API_KEY           — optional but strongly recommended (faster NVD/CPE sync)
+#   NVD_API_KEY           — optional but recommended (faster CPE dictionary sync)
 # Generate a JWT signing key for read-only API tokens:
 echo "HASURA_JWT_SECRET=$(openssl rand -hex 32)" >> .env
 
-# 3. Start the long-running services
-docker compose up -d postgres hasura
+# 3. Start the core stack
+docker compose up -d postgres hasura ingest
 
 # 4. Apply the database schema (idempotent)
-docker compose run --rm ingest schema
+docker compose exec ingest vdb schema
 
-# 5. Download and import data (start small, or use `all`)
-docker compose run --rm ingest sync redhat
-docker compose run --rm ingest import redhat
+# 5. Download and write data (start small, or use a group / everything)
+docker compose exec ingest vdb sync   cvelistv5
+docker compose exec ingest vdb ingest cvelistv5
 
 # 6. Wire up the GraphQL API (once)
-docker compose run --rm ingest hasura-init
+docker compose exec ingest vdb hasura-init
 ```
 
 After this, the GraphQL endpoint is at `http://localhost:8080/v1/graphql` and the
@@ -81,9 +76,9 @@ Hasura console at `http://localhost:8080/console`.
 
 ## Production variant
 
-`docker-compose.prod.yml` is a hardened variant: Postgres exposes no host port, the
-Hasura console is disabled (`HASURA_GRAPHQL_ENABLE_CONSOLE=false`), and pgAdmin is
-omitted. Use it with:
+`docker-compose.prod.yml` is hardened: Postgres exposes no host port, the Hasura
+console is disabled (`HASURA_GRAPHQL_ENABLE_CONSOLE=false`), pgAdmin is omitted, and
+Traefik terminates TLS in front of the API.
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d
@@ -91,6 +86,6 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## Scheduled runs
 
-The `ofelia` service runs jobs on a cron schedule defined in `config/ofelia.ini`, which
-invokes the `pipeline` command against jobs declared in `config/schedule.json`
-(`daily`, `weekly`). See [Ingest CLI → pipeline](cli.md#pipeline).
+The `ofelia` service runs the CLI on a cron schedule, defined in `config/ofelia.ini`
+and `config/schedule.json`, so each source is kept fresh by periodic `sync` + `ingest`
+runs without manual intervention. See the [Ingest CLI](cli.md).

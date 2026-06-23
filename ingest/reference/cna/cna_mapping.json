@@ -1,0 +1,387 @@
+[
+  {
+    "cna_id": "CNA-2005-0006",
+    "alias": [
+      "redhat-cnalr"
+    ]
+  },
+  {
+    "cna_id": "CNA-2007-0001",
+    "alias": [
+      "Splunk",
+      "duo"
+    ]
+  },
+  {
+    "cna_id": "CNA-2009-0003",
+    "alias": [
+      "Teradici"
+    ]
+  },
+  {
+    "cna_id": "CNA-2014-0002",
+    "alias": [
+      "microfocus"
+    ]
+  },
+  {
+    "cna_id": "CNA-2016-0003",
+    "alias": [
+      "sgi"
+    ]
+  },
+  {
+    "cna_id": "CNA-2016-0009",
+    "alias": [
+      "f5"
+    ]
+  },
+  {
+    "cna_id": "CNA-2016-0022",
+    "alias": [
+      "trellix"
+    ]
+  },
+  {
+    "cna_id": "CNA-2016-0023",
+    "alias": [
+      "puppet"
+    ]
+  },
+  {
+    "cna_id": "CNA-2016-0025",
+    "alias": [
+      "pivotal"
+    ]
+  },
+  {
+    "cna_id": "CNA-2017-0019",
+    "alias": [
+      "zte"
+    ]
+  },
+  {
+    "cna_id": "CNA-2018-0001",
+    "alias": [
+      "facebook"
+    ]
+  },
+  {
+    "cna_id": "CNA-2019-0002",
+    "alias": [
+      "Document Fdn."
+    ]
+  },
+  {
+    "cna_id": "CNA-2019-0016",
+    "alias": [
+      "SICK AG"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0011",
+    "alias": [
+      "Silver Peak"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0015",
+    "alias": [
+      "SWI"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0016",
+    "alias": [
+      "NLOK"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0030",
+    "alias": [
+      "crafter"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0033",
+    "alias": [
+      "NLnet Labs"
+    ]
+  },
+  {
+    "cna_id": "CNA-2020-0038",
+    "alias": [
+      "LINE"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0001",
+    "alias": [
+      "Samsung Mobile",
+      "SamsungMobile"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0013",
+    "alias": [
+      "SNPS"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0018",
+    "alias": [
+      "@huntrdev"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0020",
+    "alias": [
+      "Fluid Attacks"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0028",
+    "alias": [
+      "Hitachi Energy"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0033",
+    "alias": [
+      "NetMotion"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0038",
+    "alias": [
+      "M-Files Corporation"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0039",
+    "alias": [
+      "JFROG",
+      "VDOO"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0042",
+    "alias": [
+      "ForgeRock",
+      "Ping Identity"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0048",
+    "alias": [
+      "ASUSTOR1"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0051",
+    "alias": [
+      "WDC PSIRT"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0055",
+    "alias": [
+      "ARTICA"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0057",
+    "alias": [
+      "Panasonic Corporation"
+    ]
+  },
+  {
+    "cna_id": "CNA-2021-0060",
+    "alias": [
+      "1E",
+      "TV"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0009",
+    "alias": [
+      "GE GP"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0010",
+    "alias": [
+      "ZUSO ART"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0015",
+    "alias": [
+      "HW"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0017",
+    "alias": [
+      "HITVAN"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0018",
+    "alias": [
+      "GEHC"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0021",
+    "alias": [
+      "TML"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0023",
+    "alias": [
+      "3DS"
+    ]
+  },
+  {
+    "cna_id": "CNA-2022-0055",
+    "alias": [
+      "Tribe29"
+    ]
+  },
+  {
+    "cna_id": "CNA-2023-0009",
+    "alias": [
+      "hillstone"
+    ]
+  },
+  {
+    "cna_id": "CNA-2023-0045",
+    "alias": [
+      "marklogic"
+    ]
+  },
+  {
+    "cna_id": "CNA-2023-0052",
+    "alias": [
+      "PureStorage"
+    ]
+  },
+  {
+    "cna_id": "CNA-2023-0081",
+    "alias": [
+      "ManageEngine"
+    ]
+  },
+  {
+    "cna_id": "CNA-2024-0007",
+    "alias": [
+      "Milestone"
+    ]
+  },
+  {
+    "cna_id": "CNA-2025-0040",
+    "alias": [
+      "netgear"
+    ]
+  },
+  {
+    "cna_id": "CNA-2026-0021",
+    "alias": [
+      "SNOWFLAKE"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-001",
+    "short_name": "360ST",
+    "organization_name": "Qihoo 360",
+    "advisory_url": "https://security.360.cn/en/",
+    "active": true,
+    "alias": [
+      "360ST"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-002",
+    "short_name": "Baicells",
+    "organization_name": "Baicells Technologies Co., Ltd.",
+    "advisory_url": "https://baicells.zendesk.com/hc/en-us/sections/206436107-Security-Vulnerability-Notices",
+    "active": true,
+    "alias": [
+      "Baicells"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-003",
+    "short_name": "Cybellum",
+    "organization_name": "Cybellum Technologies LTD",
+    "advisory_url": "https://cybellum.com/vulnerabilities/",
+    "active": true,
+    "alias": [
+      "Cybellum"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-004",
+    "short_name": "DeepSurface",
+    "organization_name": "DeepSurface Security, Inc.",
+    "advisory_url": "https://deepsurface.com/tag/blog/",
+    "active": true,
+    "alias": [
+      "DeepSurface"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-005",
+    "short_name": "F-SecureUS",
+    "organization_name": "F-Secure",
+    "advisory_url": "https://www.f-secure.com/de",
+    "active": true,
+    "alias": [
+      "F-SecureUS"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-006",
+    "short_name": "GovTech CSG",
+    "organization_name": "Government Technology Agency of Singapore Cyber Security Group (GovTech CSG)",
+    "advisory_url": "https://govtech-csg.github.io/security-advisories/advisories",
+    "active": true,
+    "alias": [
+      "GovTech CSG"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-007",
+    "short_name": "Mend",
+    "organization_name": "Mend",
+    "advisory_url": "https://www.mend.io/vulnerability-database/",
+    "active": true,
+    "alias": [
+      "Mend"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-008",
+    "short_name": "OpenCloudOS",
+    "organization_name": "OpenCloudOS Community",
+    "advisory_url": "https://www.opencloudos.org/?page_id=573",
+    "active": true,
+    "alias": [
+      "OpenCloudOS"
+    ]
+  },
+  {
+    "cna_id": "LVDB-CNA-999",
+    "short_name": "UNKNOWN",
+    "organization_name": "UNKNOWN",
+    "advisory_url": null,
+    "active": false,
+    "alias": [
+      "cspcert",
+      "dwf",
+      "joshbressers"
+    ]
+  }
+]

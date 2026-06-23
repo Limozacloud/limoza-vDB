@@ -8,4 +8,4 @@ exclude = [".venv", "tools", "scripts"]
 select = ["E", "F", "W"]
 # Stylistic rules that conflict with the existing aligned-import / compact style.
 # F (pyflakes) and logic-level E/W checks stay enabled — these catch real bugs.
-ignore = ["E402", "E701", "E741", "E501", "E401"]
+ignore = ["E402", "E701", "E702", "E741", "E501", "E401"]

@@ -29,10 +29,8 @@ read-only [GraphQL API](graphql.md).
 
 | Tool | Description |
 |------|-------------|
-| `get_cve_detail(cve_id)` | All known data for one CVE — titles, descriptions, CVSS, CWEs, references, vendor advisories, upstream fixes, affected/fixed packages across all distros, mitigations, impacts, exploits, EPSS/KEV/SSVC triage signals, and history. |
-
-More tools (mitigations per distro, package status, triage) are planned; this first
-release ships a single use case.
+| `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, solutions/workarounds, impacts, vendor assessments, advisories, exploits, EPSS/KEV/SSVC triage signals, a sample of affected packages, and the L1–L3 advisory tiers. |
+| `check_vulnerable(purl, version, release)` | Version-compares an installed package against the affected-version data: "is X version Y vulnerable?" Returns the matching CVEs with fixed version, status, and source. `release` (el9, jammy, bookworm, …) is required for OS packages, omitted for language ecosystems. |
 
 ## Enable it
 
@@ -75,17 +73,78 @@ Two independent layers:
 
 ## Connect a client
 
-For the **claude.ai** chat window the server must be reachable over HTTPS from the
-internet (terminate TLS with a reverse proxy in front of port 8765).
+The server is reachable over HTTPS at `https://<host>/mcp` and gated by a read-only
+bearer token (mint one with [`create-token`](graphql.md#read-only-tokens)). Each
+client keeps its **own** config — a server added in Claude Desktop is not visible in
+the claude.ai web app, and vice versa. Replace `<host>` and `<your-readonly-token>`.
 
-| Client | How |
-|--------|-----|
-| claude.ai | Settings → Connectors → Custom Connector → URL `https://<host>/mcp` + bearer token. (Custom connectors require a paid plan.) |
-| Claude Code | `claude mcp add --transport http limoza https://<host>/mcp --header "Authorization: Bearer <token>"` |
-| Claude Desktop | Add it as a remote connector. |
-| Other (Gemini / Vertex AI / OpenAI) | Point any MCP-capable client or agent runtime at the same endpoint — the protocol is model-agnostic. |
+### Claude Code
 
-Then ask, for example: *"Use limoza to give me the CVE details for CVE-2026-49014."*
+Native HTTP transport — add to the `mcpServers` block of `~/.claude.json` (user) or
+`.mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "limoza": {
+      "type": "http",
+      "url": "https://<host>/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-readonly-token>"
+      }
+    }
+  }
+}
+```
+
+or via the CLI:
+
+```bash
+claude mcp add --transport http limoza https://<host>/mcp \
+  --header "Authorization: Bearer <your-readonly-token>"
+```
+
+### Claude Desktop
+
+Desktop's connector UI expects OAuth, so a static bearer token is passed through the
+`mcp-remote` stdio bridge. Put the token in an `env` var and reference it from the
+header — keeping the `Bearer …` value out of `args` (where the space gets
+mis-parsed):
+
+```json
+{
+  "mcpServers": {
+    "limoza": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "https://<host>/mcp",
+        "--header", "Authorization:${AUTH}"
+      ],
+      "env": {
+        "AUTH": "Bearer <your-readonly-token>"
+      }
+    }
+  }
+}
+```
+
+Add it to `claude_desktop_config.json`, then fully restart Claude Desktop (quit via
+the tray, not just close the window).
+
+### claude.ai (web)
+
+Settings → Connectors → Custom Connector → URL `https://<host>/mcp`. The web UI uses
+OAuth; this server is bearer-only, so prefer Claude Code / Claude Desktop unless an
+OAuth layer is added. (Custom connectors require a paid plan.)
+
+### Other clients
+
+Point any MCP-capable client or agent runtime (Gemini / Vertex AI / OpenAI) at the
+same endpoint — the protocol is model-agnostic.
+
+Then ask, for example: *"Use limoza to give me the CVE details for CVE-2026-49014"*
+or *"Use limoza: is openssl 1.0.1e-30.el6_6.1 on RHEL 6 vulnerable?"*
 
 ## Image & releases
 

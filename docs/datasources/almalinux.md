@@ -1,117 +1,64 @@
 # AlmaLinux
 
-## Errata API
-- **URL:** `https://errata.almalinux.org/<major>/errata.json`
+AlmaLinux publishes its security advisories (ALSA) as a JSON errata feed, one file
+per major release.
+
+## Errata JSON
+- **URL:** `https://errata.almalinux.org/<major>/errata.full.json`
 - **Official:** Yes — AlmaLinux OS Foundation-maintained
-- **Format:** JSON (one array of errata objects per major release)
-- **Local path:** `<almalinux_errata>/<major>.json` (e.g. `8.json`, `9.json`, `10.json`)
-- **Sync:** conditional `HEAD` per major release; the file is re-downloaded only when the `ETag` (or, as a fallback, `Last-Modified`) differs from the stored checkpoint. Major releases synced: 8, 9, 10.
-- **Content:** ALSA-* (AlmaLinux Security Advisories) with their CVE references, fixed package NVRs per major release, advisory severity, title, description, issued/updated dates, and bugzilla/RHSA/self reference links. Only errata of `type == "security"` are imported.
+- **Format:** JSON array of errata objects per major release
+- **Local path:** `<major>.json` (e.g. `8.json`, `9.json`, `10.json`)
+- **Sync:** full re-download of each major's file on every sync run. Major releases synced: 8, 9, 10.
+- **Content:** ALSA-\* (AlmaLinux Security Advisories) with their CVE references, advisory
+  severity, title, issued/updated dates. Only errata with CVE references are imported.
+  Per-package fix data is a later phase.
 
 ```
 errata[] (one object per ALSA)/
-├── type                              ✗  (filter: only "security" processed)
-├── updateinfo_id                     ✅ → advisories[].@id + packages[].advisory + history[].detail + aliases[]
-├── severity                          ✅ → packages[].severity (mapped Critical→critical, Important→high, Moderate→medium, Low→low)
-├── title                             ✅ → titles[].value
-├── description                       ✅ → descriptions[].value
-├── issued_date.$date (epoch ms)      ✅ → advisories[].published + history[].date (event=advisory_added)
-├── updated_date.$date (epoch ms)     ✅ → advisories[].updated + history[].date (event=advisory_updated, if ≠ published)
-├── references[]/
-│   ├── [type=cve].id                 ✅ → cve.cve_id + aliases[]  (must start with "CVE-")
-│   ├── [type=bugzilla].href          ✅ → references[].url (type=report)
-│   ├── [type=rhsa].href              ✅ → references[].url (type=advisory)
-│   ├── [type=self].href              ✅ → references[].url (type=advisory)
-│   └── (other types)                 ✗
-└── pkglist.packages[]/
-    ├── name                          ✅ → packages[].name + packages[].purl
-    ├── version                       ✅ → packages[].ranges[].events[].fixed (NVR)
-    ├── release                       ✅ → packages[].ranges[].events[].fixed (NVR)
-    ├── epoch                         ✅ → packages[].ranges[].events[].fixed (prefixed "<epoch>:" when ≠ 0)
-    └── arch                          ✗  (per-arch duplicates collapsed by (name,version,release))
+├── id                                  ✅ → advisory.advisory_id  (e.g. ALSA-2024:1234)
+├── severity                            ✅ → advisory.severity
+├── title                               ✅ → advisory.title
+├── issued_date                         ✅ → advisory.published
+├── updated_date                        ✅ → advisory.modified
+└── references[]/
+    └── [type=cve].id                   ✅ → advisory_cve.cve_id + cve spine
 
-Legend: ✅ imported  ✗ not imported
+(other fields)                          ✗  not imported
+
+Legend: ✅ imported  ✗ not imported (yet)
 ```
 
-## PURL
-`pkg:rpm/almalinux/<package>?distro=almalinux-<major>` — e.g. `pkg:rpm/almalinux/curl?distro=almalinux-9`
-
-The package PURL carries no version (it is a package identity). The fixed version is
-stored in `packages[].ranges[].events[].fixed` as the full NVR (e.g. `7.76.1-26.el9_3.2`,
-or `1:3.5.5-4.el9_8` when an epoch is present). The synthetic distro CPE is preserved in
-`packages[].vendor_data.cpe` as `cpe:2.3:o:almalinux:almalinux:<major>:*:*:*:*:*:*:*`.
-
-## State mapping
-
-AlmaLinux errata only list packages that were fixed by an advisory. Every imported
-package is therefore emitted with a constant state — the feed carries no
-not-affected / under-investigation / will-not-fix vocabulary.
-
-| Errata source | `affected_state` | `remediation_state` | `status_raw` |
-|---|---|---|---|
-| package present in a security ALSA `pkglist` | `affected` | `fixed` | `fixed` |
-
 ## Notes
-- AlmaLinux rebuilds Red Hat errata: ALSA advisories track the corresponding RHSA. The `rhsa`-type reference link in each erratum points back to the source RHSA, but the transform does not derive the RHSA ID into a structured field — it is only stored as a `references[]` entry (type=advisory).
-- Per-CVE deduplication is keyed by `(cve_id, major)`, so one LVE record is produced per CVE per major release.
-- When the same package PURL appears in more than one advisory for a CVE, the package from the lexicographically higher advisory ID wins (treated as the more recent respin).
-- No CVSS scores, no CWEs, no mitigations, no impacts, and no exploit data are available in this feed.
-- The previous documentation referenced an Aqua `vuln-list-alma` third-party mirror; the current ingest uses the official `errata.almalinux.org` JSON exclusively.
+
+- AlmaLinux is not a CNA and its errata feed carries no structured CVSS or CWE data.
+  Those fields must come from other sources (e.g. the CVE List).
+- AlmaLinux rebuilds Red Hat errata; each ALSA typically corresponds to a RHSA, but the
+  RHSA cross-reference is not extracted into a structured field.
+- Advisory URLs are constructed at import time:
+  `https://errata.almalinux.org/<major>/<ALSA-with-colon-as-dash>.html`.
+- `cve_vendor.data.severity` is set to the highest ALSA severity seen for each CVE
+  across all advisories (Critical > Important > Moderate > Low). This feeds the
+  [downstream tier](../advisory-tiers.md) `cve_levels()` assessment.
+- Affected/fixed package status (purls, version ranges) is a later phase and not
+  written yet.
 
 ---
 
-## Schema Coverage
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [cve_id] + all ALSA advisory IDs for the CVE/major
-├── has_exploit                  ❌  not written — no exploit data in the errata feed
-│
-├── cve{}
-│   ├── cve_id                   ✅  references[type=cve].id  (seed only)
-│   ├── status                   ❌  NVD only
-│   ├── published               ❌  NVD only
-│   ├── updated                 ❌  NVD only
-│   ├── epss{}                   ❌  EPSS vendor
-│   ├── kev{}                    ❌  CISA KEV vendor
-│   └── ssvc{}                   ❌  CISA SSVC vendor
-│
-├── titles[]                     ✅  primary advisory title
-├── descriptions[]              ✅  primary advisory description
-├── cvss[]                       ❌  not provided by the errata feed
-├── cwes[]                       ❌  not provided by the errata feed
-├── references[]                 ✅  bugzilla (report) + rhsa/self (advisory) links, deduped by URL
-│
-├── advisories[]
-│   ├── @id                      ✅  updateinfo_id (ALSA-YYYY:NNNN)
-│   ├── url                      ✅  https://errata.almalinux.org/<major>/<ALSA with ":"→"-">.html
-│   ├── published                ✅  issued_date
-│   ├── updated                  ✅  updated_date
-│   └── vendor_data              ❌  not written
-│
-├── upstream[]                   ❌  not written
-│
-├── packages[]
-│   ├── name                     ✅  pkglist.packages[].name
-│   ├── purl                     ✅  pkg:rpm/almalinux/<name>?distro=almalinux-<major>  (no version)
-│   ├── affected_state           ✅  constant "affected"
-│   ├── remediation_state        ✅  constant "fixed"
-│   ├── status_raw               ✅  constant "fixed"
-│   ├── vex_justification        ❌  not written
-│   ├── ranges                   ✅  [{type:"ECOSYSTEM", events:[{introduced:"0"},{fixed:"<NVR>"}]}]
-│   ├── severity                 ✅  advisory severity (mapped)
-│   ├── source                   ✅  "almalinux"
-│   ├── advisory                 ✅  ALSA-ID
-│   ├── upstream                 ❌
-│   └── vendor_data              ✅  {"cpe": "cpe:2.3:o:almalinux:almalinux:<major>:..."}
-│
-├── mitigations[]                ❌  not provided by the errata feed
-├── impacts[]                    ❌  not provided by the errata feed
-├── exploits[]                   ❌  not written
-│
-└── history[]
-    ├── date                     ✅  issued_date / updated_date
-    ├── event                    ✅  advisory_added / advisory_updated
-    ├── source                   ✅  "almalinux"
-    └── detail                   ✅  ALSA-ID
+cve_record         ❌  CVE List only
+cve_desc           ❌
+cve_cvss           ❌
+cve_cwe            ❌
+cve_ref            ❌
+cve_solution       ❌
+cve_workaround     ❌
+cve_impact         ❌
+cve_alias          ❌
+advisory           ✅  ALSA — id / title / severity / published / modified / url
+advisory_cve       ✅  ALSA ↔ CVE
+cve_vendor         ✅  {"severity": "<highest ALSA severity for this CVE>"}
+exploits           ❌
+epss / kev / ssvc  ❌  their own sources
 ```

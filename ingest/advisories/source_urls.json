@@ -1,0 +1,11 @@
+{
+  "_doc": "Zentrale URL-Templates pro Quelle. Platzhalter: {cve}=CVE-ID · {id}=Advisory-ID · {year}=Jahr aus der ID · {slug}=lower(id) ohne ':'. cve_url = per-CVE-Seite (→ cve_vendor.cve_url, L3-Tracking). advisory_url = menschenlesbare Advisory-Seite (→ advisory.url, ersetzt die rohe Quell-URL). when_id_prefix = advisory_url nur wenn die ID so beginnt.",
+  "redhat":    { "cve_url": "https://access.redhat.com/security/cve/{cve}" },
+  "ubuntu":    { "cve_url": "https://ubuntu.com/security/{cve}" },
+  "debian":    { "cve_url": "https://security-tracker.debian.org/tracker/{cve}" },
+  "rocky":     { "cve_url": "https://errata.rockylinux.org/cve/{cve}" },
+  "microsoft": { "cve_url": "https://msrc.microsoft.com/update-guide/vulnerability/{cve}" },
+  "suse":      { "cve_url": "https://www.suse.com/security/cve/{cve}.html",
+                 "advisory_url": "https://www.suse.com/support/update/announcement/{year}/{slug}/",
+                 "when_id_prefix": "SUSE-SU" }
+}

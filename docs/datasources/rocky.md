@@ -1,154 +1,71 @@
 # Rocky Linux
 
-Rocky Linux is ingested from **two** feeds that together cover both historical and
-recent advisories:
+Rocky Linux advisories (RLSA) are ingested from the **RESF Apollo API**, the official
+Rocky Linux errata service.
 
-1. **updateinfo.xml** — the repodata `updateinfo` metadata mirrored from the package
-   repositories (bulk history).
-2. **Apollo API** — the RESF Apollo errata API (recent tail, always current).
-
-Both feeds produce one LVE record per `(CVE, major release)`. Apollo records carry
-fewer fields than updateinfo records (see Schema Coverage).
-
-## updateinfo.xml feed
-- **URL:** `https://download.rockylinux.org/pub/rocky/<major>/<repo>/x86_64/os/repodata/` — the `updateinfo` file location is discovered from `repomd.xml`.
-- **Official:** Yes — Rocky Enterprise Software Foundation repodata
-- **Format:** gzipped `updateinfo.xml` (RPM updateinfo metadata)
-- **Local path:** `<rocky_errata>/<major>/<repo>.xml` (downloaded as `<repo>.xml.gz`, then decompressed; the `.gz` is removed)
-- **Sync:** for each `(major, repo)` the `updateinfo` location is resolved from `repomd.xml`, then a conditional `HEAD` (ETag, falling back to Last-Modified) decides whether to re-download. Majors: 8, 9, 10. Repos: BaseOS, AppStream, NFV. Arch: x86_64.
-- **Content:** RLSA-* advisories (`type="security"`) with CVE references, fixed package NVRs, severity, title, description, issued/updated dates, and reference links.
+## Apollo API
+- **URL:** `https://apollo.build.resf.org/api/v3/advisories`
+- **Official:** Yes — Rocky Enterprise Software Foundation (RESF)
+- **Format:** JSON (paginated, 100 advisories per page)
+- **Local path:** `advisories.json` (all pages concatenated into a single array)
+- **Sync:** full paginated fetch on every sync run
+- **Content:** RLSA-\* (Rocky Linux Security Advisories) with their CVE list, per-CVE
+  CVSS3 vectors and base scores, CWE ids, advisory severity, synopsis, published/updated
+  timestamps. Only `kind = "Security"` advisories carry CVEs and are relevant here.
+  Per-package fix data is a later phase.
 
 ```
-<updates>/<update type="security">/
-├── id                                ✅ → advisories[].@id + packages[].advisory + history[].detail + aliases[]
-├── title                             ✅ → titles[].value
-├── description                       ✅ → descriptions[].value
-├── severity                          ✅ → packages[].severity (Critical→critical, Important→high, Moderate→medium, Low→low)
-├── issued[@date]                     ✅ → advisories[].published + history[].date (event=advisory_added)
-├── updated[@date]                    ✅ → advisories[].updated + history[].date (event=advisory_updated, if ≠ published)
-├── references/reference[]/
-│   ├── [type=cve][@id]               ✅ → cve.cve_id + aliases[]  (must start with "CVE-")
-│   ├── [type=bugzilla][@href]        ✅ → references[].url (type=report)
-│   ├── [type=self][@href]            ✅ → references[].url (type=advisory)
-│   └── (other types)[@href]          ✅ → references[].url (type=web)
-└── pkglist/collection/package[]/
-    ├── @name                         ✅ → packages[].name + packages[].purl
-    ├── @version                      ✅ → packages[].ranges[].events[].fixed (NVR)
-    ├── @release                      ✅ → packages[].ranges[].events[].fixed (NVR)
-    ├── @epoch                        ✅ → packages[].ranges[].events[].fixed (prefixed "<epoch>:" when ≠ 0)
-    └── @arch                         ✗  (arch=src skipped; per-arch dupes collapsed by (name,version,release))
+advisories[] (one object per RLSA)/
+├── name                                ✅ → advisory.advisory_id  (e.g. RLSA-2024:1234)
+├── synopsis                            ✅ → advisory.title
+├── severity                            ✅ → advisory.severity
+├── published_at                        ✅ → advisory.published
+├── updated_at                          ✅ → advisory.modified
+└── cves[]/
+    ├── cve                             ✅ → advisory_cve.cve_id + cve spine
+    ├── cvss3_scoring_vector            ✅ → cve_cvss.vector
+    ├── cvss3_base_score                ✅ → cve_cvss.base_score  (computed from vector when absent)
+    └── cwe                             ✅ → cve_cwe.cwe_id  (first token, e.g. CWE-79)
 
-Legend: ✅ imported  ✗ not imported
+(other fields)                          ✗  not imported
+
+Legend: ✅ imported  ✗ not imported (yet)
 ```
-
-## Apollo API feed
-- **URL:** `https://apollo.build.resf.org/api/v3/advisories/?page=<n>&limit=100`
-- **Official:** Yes — RESF Apollo errata service
-- **Format:** JSON (paginated; `advisories[]`)
-- **Local path:** `<rocky_errata>/advisories/<name with ":"→"-">.json` (one file per advisory)
-- **Sync:** paged fetch (100/page); incremental via `filters.publishedAfter=<last sync timestamp>` stored in the checkpoint. Only `kind == "Security"` advisories are imported.
-- **Content:** RLSA-* advisories with CVE list, per-package NVRAs tagged by product (major release derived from the product name), severity, synopsis, published/updated timestamps.
-
-```
-advisories[] (kind="Security")/
-├── name                              ✅ → advisories[].@id + packages[].advisory + history[].detail + aliases[]
-├── synopsis                          ✅ → titles[].value
-├── severity                          ✅ → packages[].severity (mapped)
-├── published_at                      ✅ → advisories[].published + history[].date (event=advisory_added)
-├── updated_at                        ✅ → advisories[].updated + history[].date (event=advisory_updated, if ≠ published)
-├── kind                              ✗  (filter: only "Security" processed)
-├── cves[].cve                        ✅ → cve.cve_id + aliases[]  (must start with "CVE-")
-└── packages[]/
-    ├── product_name                  ✅ → major release (regex "Rocky Linux (\d+)") → purl distro tag
-    └── nevra                         ✅ → packages[].name + packages[].ranges[].events[].fixed
-                                          (parsed name-epoch:version-release.arch; arch src/nosrc skipped)
-
-Legend: ✅ imported  ✗ not imported
-```
-
-## PURL
-`pkg:rpm/rocky/<package>?distro=rocky-<major>` — e.g. `pkg:rpm/rocky/curl?distro=rocky-9`
-
-The package PURL carries no version (it is a package identity). The fixed version is
-stored in `packages[].ranges[].events[].fixed` as the full NVR (e.g. `7.76.1-26.el9_3.2`,
-or `1:3.5.5-4.el9_8` when an epoch is present). The synthetic distro CPE is preserved in
-`packages[].vendor_data.cpe` as `cpe:2.3:o:rocky:rocky_linux:<major>:*:*:*:*:*:*:*`.
-Both feeds emit the identical PURL/CPE shape, so records from the two feeds merge cleanly.
-
-## State mapping
-
-Both Rocky feeds only list packages that were fixed by an advisory. Every imported
-package is therefore emitted with a constant state — neither feed carries a
-not-affected / under-investigation / will-not-fix vocabulary.
-
-| Source | `affected_state` | `remediation_state` | `status_raw` |
-|---|---|---|---|
-| package present in a security RLSA (updateinfo or Apollo) | `affected` | `fixed` | `fixed` |
 
 ## Notes
-- Rocky Linux rebuilds Red Hat errata: RLSA advisories track the corresponding RHSA. The transforms do not derive an RHSA ID into a structured field; updateinfo reference links (bugzilla/self/other) are stored only as `references[]` entries, and the Apollo feed records no references at all.
-- The two feeds are complementary: updateinfo provides the historical bulk plus descriptions and references; Apollo provides the recent tail (titles from `synopsis`, no descriptions, no references).
-- Per-CVE deduplication is keyed by `(cve_id, major)`. When the same package PURL appears in more than one advisory for a CVE, the package from the lexicographically higher advisory ID wins.
-- Known gaps in coverage: the updateinfo feed is limited to the BaseOS, AppStream, and NFV repos on x86_64. kernel-rt and Cloud Kernel (RXSA) advisories from other repositories are not synced.
-- No CVSS scores, no CWEs, no mitigations, no impacts, and no exploit data are available in either feed.
-- The previous documentation referenced an Aqua `vuln-list-rocky` third-party mirror; the current ingest uses the official Rocky repodata and the Apollo API.
+
+- Rocky Linux is not a CNA. `cve_cvss` and `cve_cwe` rows are written with
+  `origin='rocky'` and `source=NULL` (no CNA orgId). Duplicate `(cve_id, vector)` pairs
+  across advisories are de-duplicated in code (since `source=NULL` defeats the
+  `ON CONFLICT` unique index).
+- `cve_vendor.data.severity` is set to the highest RLSA severity seen for each CVE across
+  all advisories (Critical > Important > Moderate > Low). This feeds the
+  [downstream tier](../advisory-tiers.md) `cve_levels()` assessment.
+- Rocky Linux rebuilds Red Hat errata; each RLSA typically corresponds to a RHSA, but the
+  RHSA cross-reference is not extracted into a structured field.
+- Advisory URLs are constructed at import time: `https://errata.rockylinux.org/<RLSA-name>`.
+  The `source_urls.json` entry (`cve_url = https://errata.rockylinux.org/cve/{cve}`) drives
+  the per-CVE tracking link in `cve_levels()`.
+- Affected/fixed package status (purls, version ranges) is a later phase and not
+  written yet.
 
 ---
 
-## Schema Coverage
-
-`(U)` = populated by the updateinfo.xml feed, `(A)` = populated by the Apollo feed.
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [cve_id] + all RLSA advisory IDs for the CVE/major  (U, A)
-├── has_exploit                  ❌  not written — no exploit data in either feed
-│
-├── cve{}
-│   ├── cve_id                   ✅  CVE reference  (U, A) (seed only)
-│   ├── status                   ❌  NVD only
-│   ├── published               ❌  NVD only
-│   ├── updated                 ❌  NVD only
-│   ├── epss{}                   ❌  EPSS vendor
-│   ├── kev{}                    ❌  CISA KEV vendor
-│   └── ssvc{}                   ❌  CISA SSVC vendor
-│
-├── titles[]                     ✅  (U) update.title / (A) advisory.synopsis
-├── descriptions[]              ✅  (U) update.description  —  ❌ Apollo provides none
-├── cvss[]                       ❌  not provided by either feed
-├── cwes[]                       ❌  not provided by either feed
-├── references[]                 ✅  (U) bugzilla (report) + self/other (advisory/web)  —  ❌ Apollo provides none
-│
-├── advisories[]
-│   ├── @id                      ✅  RLSA-ID  (U: update.id / A: advisory.name)
-│   ├── url                      ✅  https://errata.rockylinux.org/<RLSA-ID>
-│   ├── published                ✅  (U) issued / (A) published_at
-│   ├── updated                  ✅  (U) updated / (A) updated_at
-│   └── vendor_data              ❌  not written
-│
-├── upstream[]                   ❌  not written
-│
-├── packages[]
-│   ├── name                     ✅  (U) package @name / (A) parsed from nevra
-│   ├── purl                     ✅  pkg:rpm/rocky/<name>?distro=rocky-<major>  (no version)
-│   ├── affected_state           ✅  constant "affected"
-│   ├── remediation_state        ✅  constant "fixed"
-│   ├── status_raw               ✅  constant "fixed"
-│   ├── vex_justification        ❌  not written
-│   ├── ranges                   ✅  [{type:"ECOSYSTEM", events:[{introduced:"0"},{fixed:"<NVR>"}]}]
-│   ├── severity                 ✅  advisory severity (mapped)
-│   ├── source                   ✅  "rocky"
-│   ├── advisory                 ✅  RLSA-ID
-│   ├── upstream                 ❌
-│   └── vendor_data              ✅  {"cpe": "cpe:2.3:o:rocky:rocky_linux:<major>:..."}
-│
-├── mitigations[]                ❌  not provided by either feed
-├── impacts[]                    ❌  not provided by either feed
-├── exploits[]                   ❌  not written
-│
-└── history[]
-    ├── date                     ✅  issued/published_at + updated/updated_at
-    ├── event                    ✅  advisory_added / advisory_updated
-    ├── source                   ✅  "rocky"
-    └── detail                   ✅  RLSA-ID
+cve_record         ❌  CVE List only
+cve_desc           ❌
+cve_cvss           ✅  cves[].cvss3_scoring_vector / cvss3_base_score
+cve_cwe            ✅  cves[].cwe
+cve_ref            ❌
+cve_solution       ❌
+cve_workaround     ❌
+cve_impact         ❌
+cve_alias          ❌
+advisory           ✅  RLSA — id / title / severity / published / modified / url
+advisory_cve       ✅  RLSA ↔ CVE
+cve_vendor         ✅  {"severity": "<highest RLSA severity for this CVE>"}
+exploits           ❌
+epss / kev / ssvc  ❌  their own sources
 ```

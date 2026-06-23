@@ -1,77 +1,73 @@
 # CISA KEV (Known Exploited Vulnerabilities)
 
-Enrichment-only source. It populates a single sub-object — `cve.kev{}` — and
-contributes nothing else to the LVE record.
+Enrichment-only source. Populates the `kev` table — one row per CVE — and
+contributes nothing else to the database.
 
 ## KEV JSON Feed
+
 - **URL:** `https://github.com/cisagov/kev-data` (file: `known_exploited_vulnerabilities.json`)
 - **Official:** Yes — CISA (US federal)-maintained
-- **Format:** JSON
-- **Local path:** `repo/` (shallow git checkout) → reduced to `kev_index.json` (`{cve_id: {...}}`)
-- **Sync:** shallow clone (`--depth=1`) on first run, `git pull --ff-only` afterwards; the JSON is then flattened into `kev_index.json`
-- **Content:** CVEs confirmed to be actively exploited in the wild, with CISA remediation guidance and ransomware-campaign association
+- **Format:** JSON, single flat catalog
+- **Local path:** `kev/repo/known_exploited_vulnerabilities.json` (shallow git checkout)
+- **Sync:** shallow clone (`--depth=1`) on first run, `git pull --ff-only` afterwards
+- **Content:** CVEs confirmed to be actively exploited in the wild, with CISA remediation
+  guidance, due dates, and ransomware-campaign association
 
 ## Field mapping
-
-The sync step extracts many fields into `kev_index.json`, but the transform writes
-only four of them into `cve.kev{}`. The remaining indexed fields
-(`vendor_project`, `product`, `vulnerability_name`, `short_description`, `notes`,
-`cwes`) are **not** consumed by the transform.
 
 ```
 known_exploited_vulnerabilities.json
 └── vulnerabilities[]/
-    ├── cveID                          ✅ → aliases[0] + cve.cve_id
-    ├── dateAdded                      ✅ → cve.kev.date_added
-    ├── dueDate                        ✅ → cve.kev.due_date
-    ├── knownRansomwareCampaignUse     ✅ → cve.kev.known_ransomware  (see Notes — coerced to bool)
-    ├── requiredAction                 ✅ → cve.kev.required_action
-    ├── vendorProject                  ✗  (indexed by sync, not written)
-    ├── product                        ✗  (indexed by sync, not written)
-    ├── vulnerabilityName              ✗  (indexed by sync, not written)
-    ├── shortDescription               ✗  (indexed by sync, not written)
-    ├── notes                          ✗  (indexed by sync, not written)
-    └── cwes                           ✗  (indexed by sync, not written)
+    ├── cveID                          ✅ → kev.cve_id  +  cve spine (ON CONFLICT DO NOTHING)
+    ├── dateAdded                      ✅ → kev.date_added
+    ├── dueDate                        ✅ → kev.due_date
+    ├── knownRansomwareCampaignUse     ✅ → kev.known_ransomware  (see Notes)
+    ├── requiredAction                 ✅ → kev.required_action
+    ├── vendorProject                  ✅ → kev.vendor_project
+    ├── product                        ✅ → kev.product
+    ├── vulnerabilityName              ✅ → kev.vulnerability_name
+    ├── shortDescription               ✅ → kev.short_description
+    └── notes                          ✅ → kev.notes
 
-Legend: ✅ imported  ✗ not imported
+Legend: ✅ imported
 ```
 
 ## Notes
-- Pure enrichment: no titles, descriptions, CVSS, CWEs, references, advisories, or packages are written, despite some of that data being present in the feed.
-- **`known_ransomware` coercion quirk:** when the value is a string (CISA emits `"Known"` / `"Unknown"`), the transform computes `value.lower() not in ("no", "false", "")`. This means `"Unknown"` evaluates to **`true`**, the same as `"Known"`. Only the literal strings `"no"`, `"false"`, and `""` map to `false`. Treat the boolean as "ransomware field present and non-empty" rather than a strict Known/Unknown flag.
-- `cve.cve_id` is written as a seed only — not authoritative and not overwritten if already set.
-- KEV presence is a hard escalation signal regardless of CVSS or EPSS.
 
-## Schema Coverage
+- Pure enrichment: no CVSS, CWE, references, or advisory data are written.
+- **`known_ransomware` coercion:** CISA emits the string `"Known"` or `"Unknown"`.
+  The ingest step maps `"Known"` → `true`, `"Unknown"` → `false`, and any
+  non-string value → `NULL`. Only `"Known"` is a confirmed ransomware-campaign
+  association.
+- The ingest pattern is **DELETE + INSERT** in a single transaction. KEV is a full
+  snapshot and CISA can withdraw entries, so the table is rebuilt each sync to match
+  the source exactly — withdrawn CVEs disappear atomically. `DELETE` (not `TRUNCATE`)
+  takes only `ROW EXCLUSIVE`, so concurrent dashboard reads continue via MVCC until
+  commit.
+- KEV presence is a hard escalation signal regardless of CVSS score or EPSS
+  probability.
+
+---
+
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [cve_id]
-├── has_exploit                  ❌  always emitted as false (KEV implies active exploitation, but this flag is not set here)
-│
-├── cve{}
-│   ├── cve_id                   ✅  seed only (not overwritten if already set)
-│   ├── status                   ❌  NVD only
-│   ├── published                ❌  NVD only
-│   ├── updated                  ❌  NVD only
-│   ├── epss{}                   ❌  EPSS vendor
-│   ├── kev{}
-│   │   ├── date_added           ✅  dateAdded
-│   │   ├── due_date             ✅  dueDate
-│   │   ├── known_ransomware     ✅  knownRansomwareCampaignUse (coerced — see Notes)
-│   │   └── required_action      ✅  requiredAction
-│   └── ssvc{}                   ❌  CISA SSVC vendor
-│
-├── titles[]                     ❌
-├── descriptions[]               ❌  (shortDescription indexed but not written)
-├── cvss[]                       ❌
-├── cwes[]                       ❌  (cwes indexed but not written)
-├── references[]                 ❌
-├── advisories[]                 ❌
-├── upstream[]                   ❌
-├── packages[]                   ❌
-├── mitigations[]                ❌
-├── impacts[]                    ❌
-├── exploits[]                   ❌
-└── history[]                    ❌  no history events emitted
+cve                ✅  ON CONFLICT DO NOTHING — seeds the spine for every KEV entry
+cve_record         ❌  CVE List only
+cve_cvss           ❌
+cve_cwe            ❌
+cve_desc           ❌
+cve_ref            ❌
+cve_solution       ❌
+cve_workaround     ❌
+cve_impact         ❌
+cve_alias          ❌
+advisory           ❌
+advisory_cve       ❌
+cve_vendor         ❌
+exploits           ❌
+epss               ❌  FIRST EPSS source
+kev                ✅  cve_id, date_added, due_date, known_ransomware, required_action,
+                        vendor_project, product, vulnerability_name, short_description, notes
+ssvc               ❌  CISA SSVC source
 ```

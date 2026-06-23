@@ -1,5 +1,6 @@
 services:
   postgres:
+    container_name: limoza-vdb-postgres
     image: postgres:16-alpine
     env_file: .env
     ports:
@@ -9,6 +10,7 @@ services:
     restart: unless-stopped
 
   pgadmin:
+    container_name: limoza-vdb-pgadmin
     image: dpage/pgadmin4:latest
     env_file: .env
     ports:
@@ -20,12 +22,14 @@ services:
     restart: unless-stopped
 
   ingest:
+    container_name: limoza-vdb-ingest
     build: .
     env_file: .env
     environment:
       PYTHONUNBUFFERED:        "1"
       POSTGRES_DSN:            postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       NVD_DIR:                 /data/nvd
+      NVD_GITHUB_DIR:          /data/nvd-github
       REDHAT_DIR:              /data/redhat
       SUSE_VEX_DIR:            /data/suse-vex
       EPSS_DIR:                /data/epss
@@ -52,6 +56,7 @@ services:
       SCHEDULE_CONFIG:         /config/schedule.json
     volumes:
       - nvd:/data/nvd
+      - nvd_github:/data/nvd-github
       - redhat:/data/redhat
       - suse_vex:/data/suse-vex
       - epss:/data/epss
@@ -78,10 +83,10 @@ services:
       - ./config/schedule.json:/config/schedule.json:ro
     depends_on:
       - postgres
-    profiles:
-      - ingest
+    restart: unless-stopped
 
   hasura:
+    container_name: limoza-vdb-hasura
     image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
     ports:
       - "8080:8080"
@@ -96,6 +101,7 @@ services:
     restart: unless-stopped
 
   ofelia:
+    container_name: limoza-vdb-ofelia
     image: mcuadros/ofelia:latest
     restart: unless-stopped
     depends_on:
@@ -109,6 +115,7 @@ volumes:
   postgres_data:
   pgadmin_data:
   nvd:
+  nvd_github:
   redhat:
   suse_vex:
   epss:

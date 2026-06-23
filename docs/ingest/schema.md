@@ -1,278 +1,196 @@
-# Limoza Schema
+# Data model
 
-All vendor data is normalized to a single JSON schema defined in `limoza_schema.json` (repository root; embedded in full below).
+The canonical, machine-readable definition is `schema.sql` (repository root). The
+sections below are the human-readable reference — when in doubt, `schema.sql` is
+authoritative.
 
-One record per vulnerability. The `lve_id` is the stable vendor-neutral identifier; all other fields are populated by one or more vendor sources.
+The design is **CVE-centric**: the CVE id is the only join key, there is no
+synthetic identifier, and every source writes into its own rows. There are no
+foreign keys — `cve_id` joins everything, and a `CHECK` constraint keeps it in
+canonical form. A vulnerability's full picture is assembled at query time.
 
-The canonical, machine-readable definition is `limoza_schema.json` (JSON Schema draft 2020-12) at the repository root. The relational layout it maps to lives in `schema.sql`. The sections below are the human-readable reference — when in doubt, the JSON Schema file is authoritative.
+Two data shapes recur:
 
-??? note "Full JSON Schema (`limoza_schema.json`)"
+1. **CVE-keyed rows** — one or many rows per CVE (`cve_record`, the `cve_*`
+   enrichment tables, `epss`, `kev`, `ssvc`, `exploits`, `advisory_cve`,
+   `cve_vendor`).
+2. **Standalone dictionaries** — keyed by their own id (`cna`, `adp`, `cpe`,
+   `cwe`, `source_url`).
 
-    ```json
-    --8<-- "limoza_schema.json"
+??? note "Full schema (`schema.sql`)"
+
+    ```sql
+    --8<-- "schema.sql"
     ```
 
 ---
 
-## Top-level Fields
-
-### `lve_id`
-
-```
-Type: string  Pattern: ^LVDB-[0-9]{8}$
-```
-
-Auto-generated sequential identifier. Never derived from CVE or vendor IDs. Assigned by PostgreSQL trigger on first insert.
-
-Examples: `LVDB-00000001`, `LVDB-00012345`
-
----
-
-### `aliases`
-
-```
-Type: string[]
-```
-
-All known identifiers for this vulnerability — CVE IDs, vendor advisory IDs, GHSA IDs, etc. Always uppercase. Accumulated across all sources; no source discriminator.
-
-Examples: `["CVE-2023-27533", "GHSA-JFH8-C2JP-HDPQ", "RHSA-2023:1234", "ADV240001"]`
-
-Used for lookup: `_get_or_create_lve()` matches incoming records against existing LVEs via `aliases && %s::text[]`.
-
----
-
-### `has_exploit`
-
-```
-Type: boolean  Default: false
-```
-
-True when `exploits[]` is non-empty. Maintained as a derived flag for fast filtering without joining `lve_exploits`.
-
----
+## The CVE spine
 
 ### `cve`
 
-```
-Type: object | null
-```
+A thin, shared registry of every CVE id anyone has mentioned. Created by **any**
+source that references a CVE (`ON CONFLICT DO NOTHING`) — nobody owns it.
 
-CVE data from MITRE/NVD. `null` for vulnerabilities without a CVE (vendor-only advisories like Microsoft ADV, BSI WID). **Only NVD writes this object.**
+| Column | Type | Description |
+|--------|------|-------------|
+| `cve_id` | text PK | canonical id, `CHECK (cve_id ~ '^CVE-[0-9]{4}-[0-9]+$')` |
+| `first_seen` | timestamptz | when the id first entered the database |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `cve_id` | string | CVE identifier, e.g. `CVE-2023-27533` |
-| `status` | enum | `cve_assigned` · `cve_reserved` · `cve_pending` · `cve_rejected` |
-| `published` | datetime | CVE publication date from MITRE |
-| `updated` | datetime | Last-updated timestamp from MITRE |
-| `epss` | object\|null | FIRST EPSS score (`score`, `percentile`, `date`) |
-| `kev` | object\|null | CISA KEV entry (`date_added`, `due_date`, `known_ransomware`, `required_action`) |
-| `ssvc` | object\|null | CISA SSVC triage (`exploitation`, `automatable`, `technical_impact`) |
+A `cve` row with no matching `cve_record` means "known to some source, not yet
+published in the CVE List".
 
-Stored in the separate `lve_cve` table (1:1 with `lve`). All fields use `COALESCE(EXCLUDED.x, lve_cve.x)` on conflict so the last non-null write wins.
+### `cve_record`
 
----
+The CVE List baseline — one row per CVE, written by [CVE List](../datasources/cvelistv5.md).
 
-### `titles`
-
-```
-Type: array  Unique by: (source)
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `value` | string | The title text |
-| `source` | string | Who provided it: `nvd`, `microsoft`, `redhat`, … |
-| `advisory` | ref\|null | `{"@id": "..."}` linking to `advisories[]` |
+| Column | Type | Description |
+|--------|------|-------------|
+| `cve_id` | text PK | |
+| `state` | text | `PUBLISHED` \| `REJECTED` \| `RESERVED` |
+| `assigner` | text | the assigning CNA's short name → `cna.short_name` (the **L1** tier) |
+| `date_reserved` / `date_published` / `date_updated` | timestamptz | lifecycle dates |
+| `title` | text | CNA-provided title |
+| `exploit_note` | text | CNA prose about exploitation |
 
 ---
 
-### `descriptions`
+## Per-CVE enrichment (multi-source)
 
-```
-Type: array  Unique by: (source)
-```
+These tables hold the descriptive content of a CVE. Each has the same provenance
+columns — **`origin`** (the importer, the unit of delete-and-replace) and
+**`source`** (who authored the data: `cna`, an ADP short name, a distro, …)
+— so several sources contribute side by side without overwriting each other.
 
-Same structure as `titles`. HTML is stripped during transform.
+| Table | Holds | Key columns |
+|-------|-------|-------------|
+| `cve_cvss` | CVSS scores | `version`, `base_score`, `severity`, `vector` |
+| `cve_cwe` | CWE weakness ids | `cwe_id` → [`cwe`](../datasources/cwe.md) |
+| `cve_desc` | descriptions | `lang`, `value` |
+| `cve_ref` | references / links | `url`, `type` |
+| `cve_solution` | remediation prose | `lang`, `value` |
+| `cve_workaround` | mitigation prose | `lang`, `value` |
+| `cve_impact` | CAPEC impact | `capec_id`, `description` |
+| `cve_alias` | other ids (GHSA, JVNDB, …) | `alias` |
 
----
-
-### `cvss`
-
-```
-Type: array  Unique by: (vector, source)
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `version` | enum | `2.0` · `3.0` · `3.1` · `4.0` |
-| `score` | number | 0–10 |
-| `vector` | string | Full CVSS vector string |
-| `severity` | enum\|null | `critical` · `high` · `medium` · `low` · `informational` |
-| `source` | string | Scoring authority |
-| `advisory` | ref\|null | Link to advisory |
+Each is uniquely keyed by `(cve_id, origin, source, …)` so re-imports are
+idempotent.
 
 ---
 
-### `cwes`
+## Advisories
 
-```
-Type: array  Unique by: (id, source)
-```
+Vendor and distro security **bulletins** (RHSA, USN, GHSA, …). The issuer's own
+per-CVE enrichment lands in the `cve_*` tables (with `origin = <source>`); only the
+bulletin object, its CVE links, and the per-CVE vendor assessment live here.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | e.g. `CWE-122`; joins to the `cwe` dictionary table for the full weakness definition |
-| `name` | string\|null | Human-readable name when provided; else filled from the CWE dictionary |
-| `source` | string | Who classified it |
-| `advisory` | ref\|null | Link to advisory |
+### `advisory`
 
-The shared weakness definition (mitigations, consequences, likelihood, …) is **not**
-duplicated per record — it lives once in the `cwe` dictionary table, populated on-reference
-from the [CWE source](../datasources/cwe.md) and keyed by `id`.
+| Column | Type | Description |
+|--------|------|-------------|
+| `source` | text | the **issuer** name (`redhat`, `suse`, `ghsa`, …) — not always a CNA |
+| `advisory_id` | text | `RHSA-2024:2011` |
+| `url`, `title`, `severity` | text | per-advisory metadata (may be NULL) |
+| `published` / `modified` | timestamptz | |
+| `vendor_data` | jsonb | source-specific extras |
 
----
+Primary key `(source, advisory_id)`.
 
-### `references`
+### `advisory_cve`
 
-```
-Type: array  Unique by: (url)
-```
+Links `(source, advisory_id)` to one or more `cve_id`. The many-to-many between
+bulletins and CVEs.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `url` | string | Link target |
-| `type` | enum | `patch` · `advisory` · `article` · `fix` · `report` · `web` |
-| `source` | string | Who added the reference |
-| `advisory` | ref\|null | Link to advisory |
+### `cve_vendor`
 
----
+A per-CVE **assessment** by a vendor/distro — present even when no formal bulletin
+was issued (e.g. a distro that only tracks a CVE's status). One row per
+`(cve_id, source)`; everything source-specific lives in `data` (JSONB), typically a
+severity/priority/urgency.
 
-### `advisories`
-
-```
-Type: array  Unique by: (@id)
-```
-
-Vendor advisories covering this vulnerability. The `@id` is the cross-reference anchor used by `titles[]`, `descriptions[]`, `cvss[]`, `cwes[]`, `packages[]`.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `@id` | string | Advisory identifier, e.g. `RHSA-2023:1234`, `2024-Apr` |
-| `source` | string | Vendor |
-| `url` | string\|null | Advisory URL |
-| `published` | datetime\|null | |
-| `updated` | datetime\|null | |
-| `packages` | string[] | PURLs covered by this advisory within this LVE |
-| `vendor_data` | object\|null | Vendor-specific fields with no universal equivalent |
+> The split matters for the [advisory tiers](../advisory-tiers.md): a formal
+> `advisory` is a published bulletin, while a `cve_vendor` row with no advisory is a
+> distro that merely *tracked* the CVE.
 
 ---
 
-### `packages`
+## Dictionaries
 
-```
-Type: array  Unique by: (purl, source)
-```
+### `cna`
 
-Affected and fixed packages across all distros and ecosystems. The `purl` identifies
-the package **without** a version — version information lives in `ranges[]`.
+CVE Numbering Authorities (from the CVE Program partner list).
 
-The fix state is modelled on **two orthogonal axes**: `affected_state` answers "is this
-package affected?" and `remediation_state` answers "is a fix available?". A package can
-be `affected_state=affected` and `remediation_state=fixed` at the same time.
+| Column | Type | Description |
+|--------|------|-------------|
+| `short_name` | text PK | the assigner name used by `cve_record.assigner` |
+| `cna_id`, `organization_name`, `scope`, `advisory_url` | text | partner metadata |
+| `aliases` | text[] | record short-name variants that map to this CNA |
+| `uuids` | text[] | all `providerMetadata.orgId`s seen → join key for `cve_*.source` |
+| `advisory_patterns` | jsonb | `[{pattern, template}]` — drives the **L2** upstream-advisory match |
+| `active` | boolean | soft-delete flag (CNAs are never hard-deleted) |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string\|null | Human-readable package name, e.g. `kernel`, `curl` |
-| `purl` | string | Package identity without version |
-| `affected_state` | enum | `affected` · `not_affected` · `not_applicable` · `unknown` |
-| `remediation_state` | enum | `fixed` · `will_not_fix` · `pending` · `none` · `unknown` |
-| `status_raw` | string\|null | Original vendor status string before normalisation |
-| `vex_justification` | string\|null | VEX "not affected" reason (CSAF `flags[].label` / OpenVEX) |
-| `ranges` | array\|null | OSV-style `[{type, events[{introduced\|fixed\|last_affected}]}]`; null for not_affected/unknown |
-| `source` | string | Who reported this fix |
-| `advisory` | ref\|null | Link to advisory |
-| `upstream` | ref\|null | Link to `upstream[]` entry |
-| `severity` | enum\|null | Vendor-assessed severity for this package |
-| `vendor_data` | object\|null | Vendor-specific fields, e.g. `cpe`, `is_backport` |
+### `adp`
 
----
+Authorized Data Publishers (CISA-ADP, the CVE Program container, …) — collected as
+a byproduct of the CVE List scan. `cve_*.source` references these by UUID for
+ADP-authored rows.
 
-### `upstream`
+### `cpe`
 
-```
-Type: array  Unique by: (@id)
-```
+The NVD CPE 2.3 dictionary (~1.7M entries) — used to validate product identifiers.
 
-Upstream project fix information (PURL, `fix_version`, `fix_commit`, `ranges[]`, `versions[]`). Distro packages reference their upstream via `packages[].upstream`. Populated mainly by GHSA and OSV.
+### `cwe`
+
+CWE weakness definitions (~940 rows) — the dictionary `cve_cwe.cwe_id` joins to.
 
 ---
 
-### `mitigations`
+## Risk scoring
 
-```
-Type: array  Unique by: (source, advisory)
-```
+One row per CVE, each a full snapshot from its source:
 
-Workarounds and mitigation steps that reduce risk without applying a patch.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `value` | string | Free-text mitigation/workaround instructions |
-| `source` | string | Who provided it |
-| `advisory` | ref\|null | Link to advisory |
-| `purls` | string[]\|null | PURLs this mitigation applies to; null = all packages |
+| Table | Source | Holds |
+|-------|--------|-------|
+| `epss` | [FIRST EPSS](../datasources/epss.md) | `score`, `percentile`, `date` |
+| `kev` | [CISA KEV](../datasources/cisa-kev.md) | known-exploited metadata, ransomware flag, due date |
+| `ssvc` | [CISA SSVC](../datasources/cisa-ssvc.md) | `exploitation`, `automatable`, `technical_impact` |
 
 ---
 
-### `impacts`
-
-```
-Type: array  Unique by: (source, advisory)
-```
-
-Descriptions of what an attacker can concretely achieve, beyond the CVSS vector
-(from CSAF `threats[category=impact]` and vendor statement notes).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `value` | string | Free-text impact description |
-| `source` | string | Who provided it |
-| `advisory` | ref\|null | Link to advisory |
-
----
+## Exploit intelligence
 
 ### `exploits`
 
-```
-Type: array  Unique by: (url)
-```
+Four homogeneous sources (`exploitdb`, `metasploit`, `nuclei`, `poc_github`) share
+one table with a `source` column. Per-source extras live in `metadata` (JSONB).
+Only a **link** plus factual metadata is stored — never an exploit body.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `source` | string | `metasploit` · `exploitdb` · `poc_github` · `nuclei` |
-| `source_id` | string\|null | Source-internal ID |
-| `name` | string\|null | Module/script name |
-| `url` | string | Link to exploit artifact |
-| `metadata` | object | Source-specific metadata |
+> "Does this CVE have an exploit?" = `EXISTS (SELECT 1 FROM exploits WHERE cve_id = …)`.
 
 ---
 
-### `history`
+## Advisory tiering
 
-Append-only log of changes to this LVE. Written only on first insert (`is_new=True`).
+### `source_url`
 
-| Event | Meaning |
-|-------|---------|
-| `created` | LVE first seen |
-| `cve_assigned` · `cve_rejected` | CVE state changes |
-| `advisory_added` · `advisory_updated` | Vendor advisory ingested / changed |
-| `vex_published` · `vex_updated` | VEX document published / revised |
-| `affected_state_changed` · `remediation_state_changed` | Package state updated |
-| `severity_changed` · `cvss_updated` | Scoring changes |
-| `kev_added` · `kev_removed` · `epss_updated` · `ssvc_updated` | Enrichment changes |
-| `exploit_added` | New exploit artifact found |
-| `description_updated` · `status_changed` | Other updates |
+Per-source URL templates (`cve_url`, `advisory_url`, `when_id_prefix`) — the
+SQL-accessible mirror of `ingest/advisories/source_urls.json`, the editable single
+source of truth. Seeded by `vdb ingest source_urls`.
 
-Full event enum: see `history.event` in the embedded `limoza_schema.json` above.
+### `cve_level` & `cve_levels(cve)`
+
+`cve_levels(cve)` is a set-returning function that assembles the tiered advisory
+view (L1 CNA / L2 upstream / L3 downstream) for one CVE, using `source_url` so it
+needs no hardcoded links. Tracked in Hasura as a GraphQL field. See
+[Advisory tiers (L1–L3)](../advisory-tiers.md).
+
+---
+
+## Operations
+
+### `sync_log`
+
+One row per sync/ingest run per source — `status` (`success` / `no_new_data` /
+`failed`), item counts, row deltas, timing, and a message. Powers the dashboard's
+freshness ("last successful X") and error views. The "latest run per source" is a
+query (`DISTINCT ON (source, phase) … ORDER BY finished_at DESC`).

@@ -1,6 +1,8 @@
+orjson
 psycopg2-binary
 httpx
 python-debian
 PyJWT
 jmespath
 jsonschema
+univers

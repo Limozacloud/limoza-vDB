@@ -1,87 +1,70 @@
 # Nuclei Templates
 
-Detection-intelligence source. Maps ProjectDiscovery Nuclei detection templates to
-CVEs and records them in `exploits[]`, setting `has_exploit = true`. The presence of a
-template indicates active detection is possible — it is not necessarily a working
-exploit. No package, CVSS, or remediation data is produced.
+Detection-intelligence source. Maps ProjectDiscovery Nuclei CVE templates to CVEs and
+records them in the `exploits` table. The presence of a template indicates that
+automated detection is feasible — it is not necessarily a weaponized exploit. No CVSS,
+advisory, or remediation data is produced.
 
 ## projectdiscovery/nuclei-templates
 - **URL:** `https://raw.githubusercontent.com/projectdiscovery/nuclei-templates/main/cves.json`
 - **Official:** Yes — ProjectDiscovery-maintained
 - **Format:** JSON Lines (one JSON object per line) — a pre-built CVE index of templates
 - **Local path:** generated index at `<nuclei>/nuclei_index.json`
-- **Sync:** HTTP download of `cves.json` via `httpx` (follows redirects). Each line is parsed; objects whose `ID` starts with `CVE-` are kept and grouped into a `CVE → [templates]` index.
+- **Sync:** HTTP download of `cves.json` on every run (no incremental gate — the file is rebuilt from scratch each time). Each line is parsed; objects whose `ID` starts with `CVE-` are kept and grouped into a `CVE → [templates]` index.
 - **Content:** Detection templates for CVEs (active scanning signatures), with a ProjectDiscovery-assigned severity and short description.
 
 ### Field mapping
 
 ```
 cves.json line (JSON object)
-├── ID                              ✅ → aliases[] + cve.cve_id + exploits[].source_id  (kept if starts with "CVE-")
-├── Info.Name                       ✅ → exploits[].name  (NUL-stripped)
-├── Info.Severity                   ✅ → exploits[].metadata.severity
-├── Info.Description                ✅ → exploits[].metadata.description  (NUL-stripped, truncated to 500 chars)
-├── file_path                       ✅ → exploits[].url  (https://github.com/projectdiscovery/nuclei-templates/blob/main/<file_path>)
-└── Info.Classification.cvss-score  ✗  parsed during sync, NOT written to cvss[] (dropped at ingest)
+├── ID                              ✅ → cve_id  (kept if starts with "CVE-")
+├── Info.Name                       ✅ → name  (NUL bytes stripped)
+├── Info.Severity                   ✅ → metadata.severity
+├── Info.Description                ✅ → metadata.description  (NUL bytes stripped, truncated to 500 chars)
+├── file_path                       ✅ → url  (https://github.com/projectdiscovery/nuclei-templates/blob/main/<file_path>)
+├── Info.Classification.cvss-score  ✗  parsed during sync but NOT written (dropped at ingest)
+└── source_id                       ✗  NULL — the template ID equals the CVE id and is redundant
 
 constant
-└── source                          ✅ → exploits[].source = "nuclei"
-
-derived
-└── has_exploit                     ✅ → has_exploit = true  (when ≥1 entry with a non-empty url)
+└── source                          ✅ → source = "nuclei"
 
 Legend: ✅ imported  ✗ not imported
 ```
 
-Entries with no `url` are dropped; a CVE record is upserted only if at least one
-template entry survives.
+Entries with no `url` are dropped at ingest.
 
 ## Notes
-- A Nuclei template means automated **detection** is feasible (the scanner can test
+
+- A Nuclei template means automated **detection** is feasible (the scanner can probe
   whether a target is vulnerable). This is a detection signal, distinct from a
   weaponized exploit such as a Metasploit module.
-- `severity` is independently assigned by ProjectDiscovery and may differ from the
-  NVD or vendor severity.
-- The sync step extracts `cvss-score` from the template classification, but the ingest
-  does **not** map it into the LVE `cvss[]` array — it is silently discarded. Only the
-  `severity` and `description` reach the record (inside `exploits[].metadata`).
-- This source enriches existing LVE records (matched by CVE alias); it does not create
-  package, CVSS, CWE, or advisory data.
+- `severity` is independently assigned by ProjectDiscovery and may differ from the NVD
+  or vendor severity.
+- The sync step extracts `cvss-score` from the template classification, but ingest does
+  not map it into the database — it is silently discarded. Only `severity` and
+  `description` reach `metadata`.
+- "Does this CVE have an exploit?" =
+  `EXISTS (SELECT 1 FROM exploits WHERE cve_id = … AND source = 'nuclei')`.
 
-## Schema Coverage
+---
+
+## Schema coverage
 
 ```
-LVE Record
-├── aliases[]                    ✅  [cve_id]
-├── has_exploit                  ✅  set true when a template with a url exists
-│
-├── cve{}
-│   ├── cve_id                   ✅  template ID (seed only)
-│   ├── status                   ❌
-│   ├── published               ❌
-│   ├── updated                  ❌
-│   ├── epss{}                   ❌
-│   ├── kev{}                    ❌
-│   └── ssvc{}                   ❌
-│
-├── titles[]                     ❌
-├── descriptions[]               ❌
-├── cvss[]                       ❌  cvss-score parsed during sync but dropped at ingest
-├── cwes[]                       ❌
-├── references[]                 ❌
-│
-├── advisories[]                 ❌
-├── upstream[]                   ❌
-├── packages[]                   ❌
-│
-├── mitigations[]                ❌
-├── impacts[]                    ❌
-├── exploits[]                   ✅  (detection templates)
-│   ├── source                   ✅  "nuclei"
-│   ├── source_id                ✅  template ID (= CVE)
-│   ├── name                     ✅  Info.Name
-│   ├── url                      ✅  blob link to the template on main
-│   └── metadata{}               ✅  {severity, description (≤500 chars)}
-│
-└── history[]                    ❌
+cve_record         ❌  CVE List only
+cve_desc           ❌
+cve_cvss           ❌
+cve_cwe            ❌
+cve_ref            ❌
+cve_solution       ❌
+cve_workaround     ❌
+cve_impact         ❌
+cve_alias          ❌
+advisory           ❌
+advisory_cve       ❌
+cve_vendor         ❌
+exploits           ✅  source='nuclei' · source_id=NULL · name=Info.Name
+                       url=https://github.com/projectdiscovery/nuclei-templates/blob/main/<file_path>
+                       metadata={severity, description (≤500 chars)}
+epss / kev / ssvc  ❌  their own sources
 ```
