@@ -63,8 +63,14 @@ def parse_purl(purl):
     quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
     ptype = parts[0]
     # rpm/deb: bare package name (namespace=redhat/ubuntu dropped, like affected.package);
-    # ecosystem: everything after the type (django, @scope/x, group:artifact …)
-    name = parts[-1] if ptype in ("rpm", "deb") else "/".join(parts[1:])
+    # maven: group:artifact (purl uses "/", but GHSA/OSV store the ":" form);
+    # other ecosystems: name as-is (django, @scope/x, …)
+    if ptype in ("rpm", "deb"):
+        name = parts[-1]
+    elif ptype == "maven":
+        name = ":".join(parts[1:])
+    else:
+        name = "/".join(parts[1:])
     return ptype, name, version or None, quals
 
 
