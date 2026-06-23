@@ -186,6 +186,32 @@ needs no hardcoded links. Tracked in Hasura as a GraphQL field. See
 
 ---
 
+## Affected versions (L4)
+
+### `affected`
+
+The version-precise layer derived by the `vdb affected` pass — one row per
+(CVE, package/product, range), in two coordinate systems. See
+[Affected versions (L4)](../affected-versions.md).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `cve_id` | text | the CVE |
+| `coord` | text | `purl` (managed / ecosystem) \| `cpe` (unmanaged / OS / binary) |
+| `ecosystem` / `package` / `release` | text | purl-lane identity (rpm/deb/pypi/…, name, distro release) |
+| `cpe23` | text | cpe-lane identity — canonical, NVD-validated `vendor:product` |
+| `introduced` / `fixed` / `last_affected` | text | the version range (fixed = exclusive, last_affected = inclusive) |
+| `version_scheme` | text | comparison scheme (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
+| `status` | text | canonical VEX status (`not_affected` / `under_investigation` / `affected` / `fixed` / `wont_fix` / `unknown`) |
+| `status_raw` | text | the source's original wording |
+| `source` / `status_source` / `origin` | text | author / who decided / importer (delete-scope key) |
+
+Tracked in Hasura (related from `cve`); the
+[matcher](../affected-versions.md#the-matcher) version-compares a scanned component
+against it (`vdb match`, MCP `check_vulnerable`).
+
+---
+
 ## Operations
 
 ### `sync_log`

@@ -5,7 +5,8 @@ CVRF (Common Vulnerability Reporting Framework) JSON. One document per Patch Tue
 release covers all advisories issued that month. Microsoft is a CNA; its per-CVE
 assessments — CVSS, CWE, description, severity, and exploit status — land in the
 `cve_*` enrichment tables, while the monthly release itself becomes the `advisory`
-row and each referenced CVE becomes an `advisory_cve` link.
+row and each referenced CVE becomes an `advisory_cve` link. The per-product **fix
+builds** (from the Remediations) drive the [affected-version layer](../affected-versions.md).
 
 ## MSRC CVRF v3.0 (monthly releases)
 
@@ -15,7 +16,7 @@ row and each referenced CVE becomes an `advisory_cve` link.
 - **Format:** CVRF JSON (requested with `Accept: application/json`)
 - **Local path:** `{microsoft}/{release}.json` (one file per monthly release)
 - **Sync:** fetch the updates index; download each monthly release not already on disk. The two most-recent releases are always re-fetched (they are revised after Patch Tuesday). No `since`-year filter.
-- **Content:** per-CVE CVSS score sets, CWE list, description (Notes Type 2), severity (Threats Type 3), exploit status (Threats Type 1), impact type (Threats Type 0), and KB fix advisories (Remediations Type 2). Product-level affected/fixed detail is phase 3.
+- **Content:** per-CVE CVSS score sets, CWE list, description (Notes Type 2), severity (Threats Type 3), exploit status (Threats Type 1), impact type (Threats Type 0), and per-product fix builds (Remediations `FixedBuild`) → the [affected-version layer](../affected-versions.md).
 
 ```
 DocumentTracking/
@@ -35,13 +36,36 @@ Vulnerability[]/
 ├── Threats[Type==3].Description      ✅ → cve_vendor.data.severity  (Critical/Important/Moderate/Low; max across products)
 ├── Threats[Type==1].Description      ✅ → cve_vendor.data.{exploited, publicly_disclosed, exploitability}
 ├── Threats[Type==0].Description      ✅ → cve_vendor.data.impact  (STRIDE-like type string; first wins)
-├── Remediations[Type==2]             ✗  KB↔product detail (phase 3)
+├── Remediations[*].FixedBuild        ✅ → affected (coord=cpe) — fix build per product (all SubTypes)
+│   └── ProductID[] → ProductTree CPE ✅ → affected.cpe23 (NVD-validated via cpe_norm)
 ├── Remediations[Type==3].URL         ✗  not consumed
-├── Remediations[Type!=2,3]           ✗  (Workaround / Mitigation / WillNotFix not consumed)
+├── Remediations[*] without FixedBuild ✗ (Workaround / Mitigation / WillNotFix — no version)
 └── Notes[Type!=2]                    ✗
 
 Legend: ✅ imported  ✗ not imported
 ```
+
+## Affected versions (L4)
+
+Microsoft patches by **build number**, not package version. The `microsoft` extractor
+(`ingest/affected/sources/microsoft.py`) turns each Remediation that carries a
+`FixedBuild` into an `affected` row (`coord=cpe`):
+
+- **Product → CPE.** `ProductTree.FullProductName` maps each `ProductID` to a CPE,
+  resolved + **validated against the NVD catalogue** by
+  [`cpe_norm`](../affected-versions.md#cpe-validation). MSRC's `windows_server_2012_R2`
+  and a scanner's `windows_server_2012` + `update=r2` land on the same key; 2012 and
+  2012 R2 stay distinct (builds 6.2.9200 vs 6.3.9600).
+- **No-CPE fallback.** Older MSRC products (2019-2021) often carry no CPE; their name is
+  resolved via `cpe_norm.from_name()` and validated the same way (covers Windows OS +
+  Office 2016+/SQL/Visual Studio).
+- **Fix build.** `FixedBuild` → `affected.fixed` (`version_scheme = generic`), so the
+  matcher version-compares a host build against it.
+- **Dropped:** CBL / Azure Linux (Microsoft's own Linux distro — not a CPE product), and
+  any product whose CPE can't be validated against NVD.
+
+**Known limit:** apps NVD identifies by year-in-version with no build (Exchange,
+SharePoint, Excel, .NET) are matchable only year-coarse via CPE, so they are not emitted.
 
 ## Advisory URL
 

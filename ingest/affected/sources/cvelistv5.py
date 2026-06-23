@@ -13,7 +13,7 @@ import glob
 import json
 from pathlib import Path
 
-from ingest.affected import row
+from ingest.affected import cpe_norm, row
 from ingest.affected import status as st
 
 ORIGIN = SOURCE = "cvelistv5"
@@ -25,11 +25,13 @@ _STATUS = {"affected": st.AFFECTED, "unaffected": st.NOT_AFFECTED}
 
 
 def _norm_cpe(cpe: str):
-    """cpe:2.3:a:ibm:db2:10.5.0:*:*:*:*:linux:*:* → cpe:2.3:a:ibm:db2:*:*:*:*:*:*:*:*"""
+    """Resolve+validate a CNA-provided CPE against the NVD catalog (cpe_norm); None when
+    its (vendor, product) isn't a real NVD CPE. Microsoft is excluded — MSRC is the
+    authoritative source for all Microsoft products."""
     p = cpe.split(":")
-    if len(p) < 6 or p[0] != "cpe":
+    if len(p) < 6 or p[0] != "cpe" or p[3].lower() == "microsoft":
         return None
-    return ":".join(p[:5] + ["*"] * (len(p) - 5))
+    return cpe_norm.canonical(cpe)[0]
 
 
 def _clean(v):
@@ -80,6 +82,7 @@ def _file_rows(d: dict):
 
 
 def extract(conn, dirs):
+    cpe_norm.load(conn)
     base = Path(dirs["cvelistv5"]) / "repo" / "cves"
     for f in glob.iglob(str(base / "**" / "CVE-*.json"), recursive=True):
         try:

@@ -86,8 +86,84 @@ def _lane(ptype, version, quals, release=None):
     return ptype, release          # ecosystem package — release stays None
 
 
+def parse_cpe(cpe):
+    """cpe:2.3:a:openssl:openssl:3.2.4:* → (lookup-key, version).
+
+    key = cpe:2.3:<part>:<vendor>:<product>:*:*:… (matches affected.cpe23, version→*);
+    version = the cpe version field (the installed build / version).
+    """
+    raw = cpe.lower().split(":")
+    if len(raw) < 6 or raw[0] != "cpe":
+        return None, None
+    p = (raw + ["*"] * 13)[:13]
+    ver = p[5] if p[5] not in ("*", "-", "") else None
+    upd = p[6] if p[6] not in ("-", "") else "*"      # keep update (e.g. r2); -/"" → *
+    # key mirrors cpe_norm._key: cpe:2.3:part:vendor:product:*:update:*…  (13 fields)
+    key = ":".join(["cpe", "2.3", p[2], p[3], p[4], "*", upd] + ["*"] * 6)
+    return key, ver
+
+
+def _cpe_verdict(installed, rows):
+    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status).
+
+    Group by ``introduced`` (= one affected range). Within a group the host counts as
+    patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
+    (Windows security-only vs monthly rollup, with different build numbers) don't
+    false-positive. Distinct ranges (different ``introduced``) are OR'd as usual.
+    Returns [(src, status, fixed), …] or [] when not vulnerable.
+    """
+    groups = {}
+    for r in rows:
+        if r[5] not in _SKIP:
+            groups.setdefault(r[1], []).append(r)        # by introduced
+    hits = []
+    for intro, group in groups.items():
+        scheme = group[0][4]
+        iv = _v(scheme, installed)
+        if iv is None:
+            continue
+        if intro and intro != "0":
+            lo = _v(scheme, intro)
+            if lo is not None and iv < lo:
+                continue                                  # below this range
+        fixes = [(r, _v(scheme, r[2])) for r in group if r[2]]
+        fixes = [(r, fv) for r, fv in fixes if fv is not None]
+        lasts = [(r, _v(scheme, r[3])) for r in group if r[3]]
+        lasts = [(r, lv) for r, lv in lasts if lv is not None]
+        if fixes:
+            if all(iv < fv for _, fv in fixes):           # not reached by any fix track
+                rep, _fv = min(fixes, key=lambda x: x[1])
+                hits.append((rep[0], rep[5], rep[2]))
+        elif lasts:
+            if any(iv <= lv for _, lv in lasts):
+                hits.append((lasts[0][0][0], lasts[0][0][5], None))
+        else:
+            hits.append((group[0][0], group[0][5], None))  # open-ended affected
+    return hits
+
+
+def match_cpe(conn, cpe, version=None):
+    """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
+    key, cv = parse_cpe(cpe)
+    version = version or cv
+    if not key:
+        raise ValueError("not a cpe 2.3 string")
+    if not version:
+        raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
+    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status "
+           "FROM affected WHERE coord = 'cpe' AND cpe23 = %s")
+    by_cve = {}
+    with conn.cursor() as cur:
+        cur.execute(sql, (key,))
+        for cid, src, intro, fixed, last, scheme, status in cur.fetchall():
+            by_cve.setdefault(cid, []).append((src, intro, fixed, last, scheme, status))
+    return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
+
+
 def match(conn, purl, version=None, release=None):
     """Return {cve_id: [(source, status, fixed), …]} for the vulnerable hits."""
+    if purl.startswith("cpe:"):
+        return match_cpe(conn, purl, version)
     ptype, name, pv, quals = parse_purl(purl)
     version = version or pv
     if not version:
