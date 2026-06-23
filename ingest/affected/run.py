@@ -5,12 +5,13 @@ Each extractor yields rows; we delete-scope that source's slice (by ``origin``)
 and stream-insert in batches so the swap is dashboard-safe.
 """
 from ingest.affected import delete_scope, flush
-from ingest.affected.sources import (almalinux, cvelistv5, debian, ghsa, oracle,
-                                     osv, redhat, rocky, suse, ubuntu)
+from ingest.affected.sources import (almalinux, cvelistv5, debian, ghsa, microsoft,
+                                     oracle, osv, redhat, rocky, suse, ubuntu)
 
 # order matters only for the clones (almalinux/rocky/oracle inherit redhat's rows),
 # so redhat must come first; otherwise each source owns its own slice.
-EXTRACTORS = (redhat, suse, ubuntu, debian, almalinux, rocky, oracle, cvelistv5, osv, ghsa)
+EXTRACTORS = (redhat, suse, ubuntu, debian, almalinux, rocky, oracle, cvelistv5,
+              microsoft, osv, ghsa)
 BATCH = 5_000
 
 
