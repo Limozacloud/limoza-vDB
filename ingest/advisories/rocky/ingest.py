@@ -6,7 +6,6 @@ score (vector kept too); cve_vendor severity = highest RLSA severity per CVE.
 """
 from pathlib import Path
 
-from psycopg2.extras import Json
 
 from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.rocky.transform import parse, parse_advisory

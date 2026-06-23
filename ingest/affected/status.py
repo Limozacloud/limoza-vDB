@@ -38,7 +38,6 @@ CSAF_JUSTIFICATION = {
 
 def from_csaf_remediation(category: str | None, details: str | None) -> str:
     """CSAF remediation category (+ vendor detail string) → canonical status."""
-    d = (details or "").lower()
     if category == "vendor_fix":
         return FIXED
     if category == "no_fix_planned":

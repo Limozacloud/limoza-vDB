@@ -8,7 +8,6 @@ import json
 import zipfile
 from pathlib import Path
 
-from psycopg2.extras import Json
 
 from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.debian.transform import invert, parse, parse_osv_advisory

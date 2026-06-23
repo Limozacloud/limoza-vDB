@@ -5,7 +5,6 @@ origin/source='microsoft' (a CNA → source uuid on cve_*). advisory = KB articl
 """
 from pathlib import Path
 
-from psycopg2.extras import Json
 
 from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.microsoft.transform import iter_vulns, parse, parse_document

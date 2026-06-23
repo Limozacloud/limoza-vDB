@@ -33,7 +33,6 @@ def _source_uuid(dsn: str):
 def _import_chunk(args):
     files, dsn, src = args
     import psycopg2
-    from psycopg2.extras import Json
 
     conn = psycopg2.connect(dsn)
     b = new_bundle()
