@@ -1,76 +1,45 @@
+# ── Production stack ──────────────────────────────────────────────────────────
+# Pre-built images from GHCR, TLS via Traefik, no exposed database, no pgAdmin,
+# Hasura console disabled. The daily scheduler runs the full pipeline.
+# Requires an external `traefik` network and DNS for the *.limoza.cloud hosts.
 services:
   postgres:
     container_name: limoza-vdb-postgres
     image: postgres:16-alpine
     env_file: .env
-    # No ports exposed — only reachable from within the Docker network.
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
   ingest:
     container_name: limoza-vdb-ingest
-    # Uses the image published to GHCR by the release workflow. Requires a published
-    # release (the image must exist) and the GHCR package set to public — or a
-    # `docker login ghcr.io`. Pin to a version tag (e.g. :0.1.1) for reproducible deploys.
     image: ghcr.io/limozacloud/limoza-vdb:latest
     env_file: .env
     environment:
-      PYTHONUNBUFFERED:        "1"
-      POSTGRES_DSN:            postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      NVD_DIR:                 /data/nvd
-      NVD_GITHUB_DIR:          /data/nvd-github
-      REDHAT_DIR:              /data/redhat
-      SUSE_VEX_DIR:            /data/suse-vex
-      EPSS_DIR:                /data/epss
-      CISA_SSVC_DIR:           /data/cisa-ssvc
-      BSI_DIR:                 /data/bsi
-      CISA_KEV_DIR:            /data/cisa-kev
-      EXPLOITDB_DIR:           /data/exploitdb
-      NUCLEI_DIR:              /data/nuclei
-      POC_GITHUB_DIR:          /data/poc-github
-      GHSA_DIR:                /data/ghsa
-      METASPLOIT_DIR:          /data/metasploit
-      MSRC_DIR:                /data/msrc
-      CPE_DIR:                 /data/cpe
-      UBUNTU_USN_DIR:          /data/ubuntu-usn
-      ORACLE_OVAL_DIR:         /data/oracle-oval
-      DEBIAN_TRACKER_DIR:      /data/debian-tracker
-      ALPINE_SECDB_DIR:        /data/alpine-secdb
-      ALMALINUX_ERRATA_DIR:    /data/almalinux-errata
-      ROCKY_ERRATA_DIR:        /data/rocky-errata
-      OSV_DIR:                 /data/osv
-      CWE_DB_DIR:              /data/cwe-db
-      SCHEDULE_CONFIG:         /config/schedule.json
-      # Proxy forwarded from .env into the container.
-      HTTP_PROXY:              ${HTTP_PROXY:-}
-      HTTPS_PROXY:             ${HTTPS_PROXY:-}
-      NO_PROXY:                ${NO_PROXY:-localhost,127.0.0.1,postgres}
+      PYTHONUNBUFFERED: "1"
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     volumes:
-      - nvd:/data/nvd
-      - nvd_github:/data/nvd-github
-      - redhat:/data/redhat
-      - suse_vex:/data/suse-vex
       - epss:/data/epss
-      - cisa_ssvc:/data/cisa-ssvc
-      - bsi:/data/bsi
-      - cisa_kev:/data/cisa-kev
-      - exploitdb:/data/exploitdb
-      - nuclei:/data/nuclei
-      - poc_github:/data/poc-github
-      - ghsa:/data/ghsa
-      - metasploit:/data/metasploit
-      - msrc:/data/msrc
+      - kev:/data/kev
+      - ssvc:/data/ssvc
+      - cna:/data/cna
       - cpe:/data/cpe
-      - ubuntu_usn:/data/ubuntu-usn
-      - oracle_oval:/data/oracle-oval
-      - debian_tracker:/data/debian-tracker
-      - alpine_secdb:/data/alpine-secdb
-      - almalinux_errata:/data/almalinux-errata
-      - rocky_errata:/data/rocky-errata
+      - cwe:/data/cwe
+      - cvelistv5:/data/cvelistv5
+      - redhat:/data/redhat
+      - suse:/data/suse
+      - ubuntu:/data/ubuntu
+      - debian:/data/debian
+      - oracle:/data/oracle
+      - almalinux:/data/almalinux
+      - rocky:/data/rocky
+      - microsoft:/data/microsoft
+      - ghsa:/data/ghsa
       - osv:/data/osv
-      - cwe_db:/data/cwe-db
-      - ./config/schedule.json:/config/schedule.json:ro
+      - exploitdb:/data/exploitdb
+      - metasploit:/data/metasploit
+      - nuclei:/data/nuclei
+      - poc_github:/data/poc_github
     depends_on:
       - postgres
     restart: unless-stopped
@@ -79,57 +48,77 @@ services:
     container_name: limoza-vdb-hasura
     image: ghcr.io/mchill007/graphql-engine:v2.49.1-custom.2
     env_file: .env
-    ports:
-      - "8080:8080"
     environment:
-      HASURA_GRAPHQL_DATABASE_URL:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      HASURA_GRAPHQL_ENABLE_CONSOLE:    "false"
-      HASURA_GRAPHQL_ADMIN_SECRET:      ${HASURA_ADMIN_SECRET}
-      HASURA_GRAPHQL_JWT_SECRET:        '{"type":"HS256","key":"${HASURA_JWT_SECRET}"}'
-      HASURA_GRAPHQL_UNAUTHORIZED_ROLE: anonymous
+      HASURA_GRAPHQL_DATABASE_URL:   postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "false"
+      HASURA_GRAPHQL_ADMIN_SECRET:   ${HASURA_ADMIN_SECRET}
+      HASURA_GRAPHQL_JWT_SECRET:     '{"type":"HS256","key":"${HASURA_JWT_SECRET}"}'
     depends_on:
       - postgres
     restart: unless-stopped
+    networks: [default, traefik]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.vdb.rule=Host(`vdb.limoza.cloud`)"
+      - "traefik.http.routers.vdb.entrypoints=websecure"
+      - "traefik.http.routers.vdb.tls.certresolver=myresolver"
+      - "traefik.http.services.vdb.loadbalancer.server.port=8080"
 
-  # ── MCP server (optional) ────────────────────────────────────────────────────
-  # A real MCP server exposing the vDB as MCP tools (e.g. get_cve_detail), reachable
-  # by any MCP-capable client — the Claude chat window, Claude Code, or an agent
-  # driving Gemini / Vertex AI / OpenAI. Fully decoupled (see ./mcp-server). Disabled
-  # by default; uncomment this block + set MCP_AUTH_TOKEN in .env to enable.
-  # mcp:
-  #   image: ghcr.io/limozacloud/limoza-vdb-mcp:latest
-  #   # All config lives in .env (see .env.template): MCP_AUTH_TOKEN, and either
-  #   # GRAPHQL_TOKEN or the shared HASURA_JWT_SECRET for read-only Hasura access.
-  #   # GRAPHQL_URL defaults to http://hasura:8080/v1/graphql — override in .env if needed.
-  #   env_file: .env
-  #   ports:
-  #     - "8765:8765"
-  #   depends_on:
-  #     - hasura
-  #   restart: unless-stopped
+  mcp:
+    container_name: limoza-vdb-mcp
+    image: ghcr.io/limozacloud/limoza-vdb-mcp:latest
+    env_file: .env
+    environment:
+      GRAPHQL_URL:       http://hasura:8080/v1/graphql
+      HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
+    depends_on:
+      - hasura
+    restart: unless-stopped
+    networks: [default, traefik]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.vdb-mcp.rule=Host(`vdb-mcp.limoza.cloud`)"
+      - "traefik.http.routers.vdb-mcp.entrypoints=websecure"
+      - "traefik.http.routers.vdb-mcp.tls.certresolver=myresolver"
+      - "traefik.http.services.vdb-mcp.loadbalancer.server.port=8765"
+
+  ofelia:
+    container_name: limoza-vdb-ofelia
+    image: mcuadros/ofelia:latest
+    depends_on:
+      - ingest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/ofelia.ini:/etc/ofelia/config.ini:ro
+    command: daemon --config=/etc/ofelia/config.ini
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  nvd:
-  nvd_github:
-  redhat:
-  suse_vex:
-  epss:
-  cisa_ssvc:
-  bsi:
-  cisa_kev:
-  exploitdb:
-  nuclei:
-  poc_github:
-  ghsa:
-  metasploit:
-  msrc:
-  cpe:
-  ubuntu_usn:
-  oracle_oval:
-  debian_tracker:
-  alpine_secdb:
-  almalinux_errata:
-  rocky_errata:
-  osv:
-  cwe_db:
+  epss: {}
+  kev: {}
+  ssvc: {}
+  cna: {}
+  cpe: {}
+  cwe: {}
+  cvelistv5: {}
+  redhat: {}
+  suse: {}
+  ubuntu: {}
+  debian: {}
+  oracle: {}
+  almalinux: {}
+  rocky: {}
+  microsoft: {}
+  ghsa: {}
+  osv: {}
+  exploitdb: {}
+  metasploit: {}
+  nuclei: {}
+  poc_github: {}
+
+networks:
+  traefik:
+    external: true
