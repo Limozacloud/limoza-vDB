@@ -53,8 +53,26 @@ def transform(d: dict):
     if not cves:
         return None                       # CVE-centric
     title = d.get("summary") or (d.get("details") or "")[:100].strip() or None
-    purls = {p for p in (_purl(a.get("package") or {}) for a in (d.get("affected") or [])) if p}
+    packages = []
+    for af in d.get("affected") or []:
+        purl = _purl(af.get("package") or {})
+        if not purl:
+            continue
+        spans = []
+        for r in af.get("ranges") or []:
+            ev = []
+            for e in r.get("events") or []:
+                if e.get("introduced") and e["introduced"] != "0":
+                    ev.append(">=" + e["introduced"])
+                if e.get("fixed"):
+                    ev.append("<" + e["fixed"])
+                if e.get("last_affected"):
+                    ev.append("<=" + e["last_affected"])
+            if ev:
+                spans.append(" ".join(ev))
+        packages.append({"purl": purl, "ranges": "; ".join(spans) or None})
+    purls = {p["purl"] for p in packages}
     return {"id": pid, "source": src, "cves": cves, "title": title,
             "details": (d.get("details") or "").strip() or None,
-            "url": _url(pid.split("-")[0], pid, d), "purls": purls,
+            "url": _url(pid.split("-")[0], pid, d), "packages": packages, "purls": purls,
             "published": d.get("published"), "modified": d.get("modified")}

@@ -6,7 +6,7 @@ Sources written: pypa · go · rustsec · eef · drupal. No cve_* enrichment
 import zipfile
 from pathlib import Path
 
-from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories import delete_scope, flush, new_bundle, vendor_row
 from ingest.advisories.osv.transform import parse, transform
 
 SOURCES = ("pypa", "go", "rustsec", "eef", "drupal")
@@ -26,6 +26,7 @@ def run(conn, dirs: dict) -> int:
     skipped = 0
     per = {}
     seen_desc = set()
+    cve_pkgs = {}                      # (cve, source) -> {(purl, ranges)}  → cve_vendor
     with conn.cursor() as cur:
         # GHSA's precise CVE→purl map disambiguates PYSEC/RustSec/… loose multi-CVE aliases
         cur.execute("SELECT cve_id, data->'packages' FROM cve_vendor WHERE source = 'ghsa'")
@@ -53,11 +54,24 @@ def run(conn, dirs: dict) -> int:
                     if a["details"] and (cid, a["source"]) not in seen_desc:
                         seen_desc.add((cid, a["source"]))
                         b["desc"].append((cid, a["source"], None, "en", a["details"]))
+                    if a["packages"]:
+                        acc = cve_pkgs.setdefault((cid, a["source"]), set())
+                        for p in a["packages"]:
+                            acc.add((p["purl"], p["ranges"]))
                 per[a["source"]] = per.get(a["source"], 0) + 1
                 n += 1
                 if n % BATCH == 0:
                     flush(cur, b); conn.commit(); b = new_bundle()
         flush(cur, b); conn.commit()
+
+        # affected packages → cve_vendor (one row per cve+source, like ghsa)
+        vb = new_bundle()
+        for (cid, src), pkgset in cve_pkgs.items():
+            pkgs = [{"purl": pu, "ranges": rg} for pu, rg in pkgset]
+            vb["cve_vendor"].append(vendor_row(src, cid, {"packages": pkgs}))
+            if len(vb["cve_vendor"]) >= BATCH:
+                flush(cur, vb); conn.commit(); vb = new_bundle()
+        flush(cur, vb); conn.commit()
     print(f"  osv: {n:,} native advisories · " + " · ".join(f"{k}={v}" for k, v in sorted(per.items()))
           + f" · {skipped} cross-alias links dropped")
     return n
