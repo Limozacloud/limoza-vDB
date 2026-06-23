@@ -30,19 +30,20 @@ read-only [GraphQL API](graphql.md).
 | Tool | Description |
 |------|-------------|
 | `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, solutions/workarounds, impacts, vendor assessments, advisories, exploits, EPSS/KEV/SSVC triage signals, a sample of affected packages, and the L1–L3 advisory tiers. |
-| `check_vulnerable(purl, version, release)` | Version-compares an installed package against the affected-version data: "is X version Y vulnerable?" Returns the matching CVEs with fixed version, status, and source. `release` (el9, jammy, bookworm, …) is required for OS packages, omitted for language ecosystems. |
+| `check_vulnerable(purl, version, release)` | Version-compares a scanned component against the [affected-version data](../affected-versions.md): "is X version Y vulnerable?" Accepts a **purl** (rpm/deb/ecosystem — `release` like el9 / jammy / bookworm required for OS packages, omitted for language ecosystems) **or a CPE 2.3 string** (Windows / Microsoft / binary software — build-compared). Returns the matching CVEs with fixed version, status, and source. |
 
 ## Enable it
 
-The server is defined as a **commented-out** `mcp` service in `docker-compose.prod.yml`.
-Uncomment that block, set a bearer token in `.env`, then start it:
+The `mcp` service ships in both `docker-compose.dev.yml` (built locally) and
+`docker-compose.prod.yml` (pre-built image, behind Traefik). Set a bearer token in
+`.env`, then start it:
 
 ```bash
 # 1. Add a bearer token to .env
 echo "MCP_AUTH_TOKEN=$(openssl rand -hex 32)" >> .env
 
-# 2. Uncomment the `mcp:` service in docker-compose.prod.yml, then:
-docker compose -f docker-compose.prod.yml up -d mcp
+# 2. Start the service:
+docker compose up -d mcp
 ```
 
 The MCP endpoint is then served at `http://<host>:8765/mcp` and a plain health check
@@ -143,8 +144,9 @@ OAuth layer is added. (Custom connectors require a paid plan.)
 Point any MCP-capable client or agent runtime (Gemini / Vertex AI / OpenAI) at the
 same endpoint — the protocol is model-agnostic.
 
-Then ask, for example: *"Use limoza to give me the CVE details for CVE-2026-49014"*
-or *"Use limoza: is openssl 1.0.1e-30.el6_6.1 on RHEL 6 vulnerable?"*
+Then ask, for example: *"Use limoza to give me the CVE details for CVE-2026-49014"*,
+*"Use limoza: is openssl 1.0.1e-30.el6_6.1 on RHEL 6 vulnerable?"*, or with a CPE —
+*"Use limoza to check cpe:2.3:o:microsoft:windows_server_2012:6.3.9600.20000:r2:\*:\*:\*:\*:\*:\*:\*"*.
 
 ## Image & releases
 

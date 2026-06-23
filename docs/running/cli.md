@@ -29,6 +29,8 @@ target they act on everything.
 |---------|--------------|
 | [`sync`](#sync) | Download / update one or more sources |
 | [`ingest`](#ingest) | Write synced data into the database |
+| [`affected`](#affected) | Derive the L4 affected-version layer (after sync + ingest) |
+| [`match`](#match) | Version-compare a scanned component against the affected layer |
 | [`schema`](#schema) | Apply the database schema |
 | [`hasura-init`](#hasura-init) | Track tables + relationships + read-only permissions |
 | [`create-token`](#create-token) | Mint a read-only GraphQL JWT |
@@ -63,6 +65,36 @@ docker compose exec ingest vdb ingest                       # everything synced
 
 Each run is isolated and logged: a `sync_log` row records `success` / `no_new_data`
 / `failed` with the row delta. One source failing never aborts the rest.
+
+## affected
+
+Derives the [affected-version layer (L4)](../affected-versions.md) from the already
+synced + ingested sources — one central pass after `sync` + `ingest`. Each extractor
+owns its slice (delete-by-`origin`, reinsert). With no target it rebuilds everything;
+pass source keys to rebuild only those.
+
+```bash
+docker compose exec ingest vdb affected                     # full rebuild
+docker compose exec ingest vdb affected cvelistv5 microsoft  # only these origins
+```
+
+CPE-producing sources (`cvelistv5`, `microsoft`) validate every CPE against the NVD
+catalogue; the distro/ecosystem sources produce purl rows.
+
+## match
+
+Version-compares a scanned component against `affected` and prints the vulnerable CVEs
+(fixed version, status, source). Accepts a **purl** or a **CPE 2.3** string; the version
+may be in the identifier or given as a second argument.
+
+```bash
+docker compose exec ingest vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1
+docker compose exec ingest vdb match pkg:deb/ubuntu/curl 7.81.0-1 jammy
+docker compose exec ingest vdb match 'cpe:2.3:o:microsoft:windows_server_2012:6.3.9600.20000:r2:*:*:*:*:*:*'
+```
+
+This is the same engine behind the MCP [`check_vulnerable`](mcp.md#tools) tool. See
+[Affected versions → the matcher](../affected-versions.md#the-matcher).
 
 ## schema
 

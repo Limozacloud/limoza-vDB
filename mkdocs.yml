@@ -52,6 +52,7 @@ nav:
       - CWE: datasources/cwe.md
   - Reference:
     - Advisory tiers (L1–L3): advisory-tiers.md
+    - Affected versions (L4): affected-versions.md
     - GraphQL example queries: graphql-example-queries.md
     - Documentation conventions: datasource_blueprint.md
 

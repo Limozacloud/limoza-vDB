@@ -11,6 +11,7 @@ rows — there is no merge step and no record that one source owns.
 | **Sync** | Fetch raw data from a source's API/feed/git and store it under `/data/<source>` |
 | **Transform** | `parse()` + `transform()` in each source module map the raw format to rows |
 | **Write** | `ingest.run` writes the rows; the `cve` spine is filled with `ON CONFLICT DO NOTHING` |
+| **Affected (L4)** | A central `vdb affected` pass derives the [affected-version layer](../affected-versions.md) — version ranges per package in purl + cpe coordinates — from the written rows |
 
 Run the CLI with a **target** — either a single source key or a group:
 
