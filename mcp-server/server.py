@@ -19,6 +19,7 @@ from starlette.routing import Route
 
 from config import load_settings
 from hasura import HasuraClient
+from matcher import check as match_check
 from queries import FULL_CVE_SCAN
 
 log = logging.getLogger("limoza-mcp")
@@ -61,6 +62,41 @@ async def get_cve_detail(cve_id: str) -> dict:
         "cve_id": cve_id,
         "record": rec,
         "advisory_tiers": data.get("cve_levels") or [],
+    }
+
+
+@mcp.tool()
+async def check_vulnerable(purl: str, version: str, release: str = "") -> dict:
+    """Check whether an installed package version is affected by known CVEs (version-compared
+    against limoza-vDB's affected-version data). Use this for "is X version Y vulnerable?".
+
+    Build the purl from the platform:
+      - RHEL / AlmaLinux / Rocky / Oracle rpm:  pkg:rpm/redhat/<name>  (release = el8, el9, el9_2…)
+      - SUSE rpm:                               pkg:rpm/suse/<name>    (release = sles15sp7, leap15.6…)
+      - Ubuntu / Debian deb:                    pkg:deb/ubuntu/<name>  (release = jammy, noble, bookworm…)
+      - Language ecosystems:                    pkg:pypi/<name> · pkg:npm/<name> · pkg:golang/<mod>
+                                                · pkg:cargo/<name> · pkg:gem/<name>   (NO release)
+
+    For OS packages (rpm/deb) `release` is REQUIRED — if the user didn't say which release/codename,
+    ASK before calling. For language ecosystems leave `release` empty.
+
+    Returns the vulnerable CVEs, each with the fixed version, status, and which source said so.
+
+    Args:
+        purl: package URL identifying the product (see above; version may be omitted from the purl).
+        version: the installed version string (e.g. "1.0.1e-30.el6_6.1", "2.25.1").
+        release: distro release/codename — required for rpm/deb, leave empty for ecosystems.
+    """
+    res = await match_check(hasura, purl, version, release or None)
+    cves = res["cves"]
+    return {
+        "vulnerable": bool(cves),
+        "purl": purl,
+        "version": version,
+        "ecosystem": res["ecosystem"],
+        "release": res["release"],
+        "count": len(cves),
+        "cves": cves,
     }
 
 
