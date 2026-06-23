@@ -1,0 +1,69 @@
+site_name: limoza-vDB
+site_description: CVE-centric vulnerability aggregation system
+site_url: https://limozacloud.github.io/limoza-vDB/
+repo_url: https://github.com/Limozacloud/limoza-vDB
+repo_name: Limozacloud/limoza-vDB
+
+theme:
+  name: readthedocs
+
+extra_css:
+  - css/extra.css
+
+nav:
+  - Home: index.md
+  - Running limoza-vDB:
+    - Docker stack: running/docker.md
+    - Ingest CLI: running/cli.md
+    - GraphQL & Hasura: running/graphql.md
+    - MCP server: running/mcp.md
+  - Pipeline:
+    - Overview: ingest/index.md
+    - Data model: ingest/schema.md
+  - Data Sources:
+    - Overview: datasources/index.md
+    - CVE baseline:
+      - CVE List (MITRE): datasources/cvelistv5.md
+    - Linux distributions:
+      - Red Hat: datasources/redhat.md
+      - SUSE: datasources/suse.md
+      - Ubuntu: datasources/ubuntu.md
+      - Debian: datasources/debian.md
+      - AlmaLinux: datasources/almalinux.md
+      - Rocky Linux: datasources/rocky.md
+      - Oracle Linux: datasources/oracle.md
+    - OS / vendor:
+      - Microsoft MSRC: datasources/microsoft.md
+    - Package ecosystems:
+      - GitHub Advisories: datasources/ghsa.md
+      - OSV ecosystems: datasources/osv.md
+    - Risk scoring:
+      - EPSS: datasources/epss.md
+      - CISA KEV: datasources/cisa-kev.md
+      - CISA SSVC: datasources/cisa-ssvc.md
+    - Exploit intelligence:
+      - Exploit-DB: datasources/exploitdb.md
+      - Metasploit: datasources/metasploit.md
+      - Nuclei: datasources/nuclei.md
+      - PoC-in-GitHub: datasources/poc-github.md
+    - Reference dictionaries:
+      - CNA directory: datasources/cna.md
+      - NVD CPE: datasources/cpe.md
+      - CWE: datasources/cwe.md
+  - Reference:
+    - Advisory tiers (L1–L3): advisory-tiers.md
+    - GraphQL example queries: graphql-example-queries.md
+    - Documentation conventions: datasource_blueprint.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - admonition
+  - tables
+  - attr_list

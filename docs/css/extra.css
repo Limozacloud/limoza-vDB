@@ -1,0 +1,7 @@
+/* Hide the Read-the-Docs "version" flyout (.rst-versions). On GitHub Pages it has
+   no version switcher to offer — it only renders a fixed bottom-left box (repo link
+   + «Previous/Next») that is 300px wide (= sidebar width) and overlaps the lowest
+   navigation entries, which then cannot be scrolled into view. */
+.rst-versions {
+  display: none;
+}
