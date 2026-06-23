@@ -61,7 +61,13 @@ def _parse(purl):
     parts = body.split("/")
     quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
     ptype = parts[0]
-    name = parts[-1] if ptype in ("rpm", "deb") else "/".join(parts[1:])
+    # maven: group:artifact (purl uses "/", GHSA/OSV store ":")
+    if ptype in ("rpm", "deb"):
+        name = parts[-1]
+    elif ptype == "maven":
+        name = ":".join(parts[1:])
+    else:
+        name = "/".join(parts[1:])
     return ptype, name, version or None, quals
 
 
