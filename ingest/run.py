@@ -87,6 +87,9 @@ def main(argv: list[str]) -> int:
     if cmd == "affected":
         return _affected(argv[1:])
 
+    if cmd == "match":
+        return _match(argv[1:])
+
     if cmd not in ("sync", "ingest"):
         print(f"unknown command: {cmd}\n{__doc__}")
         return 1
@@ -140,6 +143,37 @@ def _log_sync(conn, source, result, started, log_run) -> None:
         items = result if isinstance(result, int) else None
         msg   = f"fetched {items:,}" if items is not None else "fetched"
         log_run(conn, source, "sync", "success", items=items, message=msg, started_at=started)
+
+
+def _match(args) -> int:
+    """Hold a scanned component against the affected table.
+    Usage: vdb match <purl@version> [release]
+      e.g. vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1
+           vdb match pkg:deb/ubuntu/curl@7.81.0-1?distro=jammy
+           vdb match pkg:pypi/django@2.0"""
+    if not args:
+        print(_match.__doc__)
+        return 1
+    from ingest.core.db import get_conn
+    from ingest.match import match
+
+    purl = args[0]
+    release = args[1] if len(args) > 1 else None
+    conn = get_conn()
+    try:
+        findings = match(conn, purl, None, release)
+    finally:
+        conn.close()
+    if not findings:
+        print("no vulnerable CVEs")
+        return 0
+    print(f"{len(findings)} vulnerable CVE(s):")
+    for cid in sorted(findings):
+        hits = findings[cid]
+        fixed = next((f for _, _, f in hits if f), None)
+        srcs = ",".join(sorted({s for s, _, _ in hits}))
+        print(f"  {cid}  fixed={fixed or '-'}  [{srcs}]")
+    return 0
 
 
 def _affected(targets=None) -> int:
