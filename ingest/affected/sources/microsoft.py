@@ -84,10 +84,15 @@ def _doc_rows(doc: dict):
                 if key in seen:
                     continue
                 seen.add(key)
-                # scope to this build lineage (major.minor) so a different scheme under the
-                # same product — e.g. Office-for-Mac 16.55.x vs Windows-Office 16.0.x — can't
-                # cross-match: a 16.0 host is below the 16.55 `introduced` and is skipped.
-                intro = ".".join(fb.split(".")[:2])
+                # scope to this build lineage so a different scheme under the same product
+                # can't cross-match (e.g. Office-for-Mac 16.55.x vs Windows-Office 16.0.x: a
+                # 16.0 host is below the 16.55 `introduced` and is skipped). Releases are keyed
+                # by major.minor (Office 16.0, SQL 15.0, Exchange 15.2) — EXCEPT the SQL drivers,
+                # whose release line is the major alone (ODBC 17.x, 18.x; .10 is a patch, not a
+                # release), so major.minor would wrongly drop e.g. a 17.5 host below a 17.10 fix.
+                prod = cpe.split(":")[4]
+                n = 1 if ("odbc_driver" in prod or "ole_db_driver" in prod) else 2
+                intro = ".".join(fb.split(".")[:n])
                 yield row(cve_id=cid, coord="cpe", cpe23=cpe, package=cpe.split(":")[4],
                           introduced=intro, fixed=fb, version_scheme="generic",
                           status=st.FIXED, status_raw=sub,
