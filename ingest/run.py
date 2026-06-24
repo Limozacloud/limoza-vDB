@@ -204,8 +204,9 @@ def _table_total(conn, table) -> int:
 
 
 def _create_token(args) -> int:
-    """Mint an HS256 JWT for Hasura, role 'readonly' (stdlib only, no PyJWT).
-    Usage: vdb create-token [--ttl <days>]   (default 1)."""
+    """Mint an HS256 JWT for Hasura (stdlib only, no PyJWT).
+    Usage: vdb create-token [--ttl <days>] [--role <role>]   (default: 1 day, readonly).
+    A non-readonly role (e.g. lve_writer) also carries readonly, so it can read + write."""
     import base64
     import datetime
     import hashlib
@@ -216,6 +217,9 @@ def _create_token(args) -> int:
     ttl = 1
     if "--ttl" in args:
         ttl = int(args[args.index("--ttl") + 1])
+    role = "readonly"
+    if "--role" in args:
+        role = args[args.index("--role") + 1]
     secret = os.environ.get("HASURA_JWT_SECRET")
     if not secret:
         print("Error: HASURA_JWT_SECRET not set in environment")
@@ -228,8 +232,8 @@ def _create_token(args) -> int:
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
         "https://hasura.io/jwt/claims": {
-            "x-hasura-allowed-roles": ["readonly"],
-            "x-hasura-default-role":  "readonly",
+            "x-hasura-allowed-roles": sorted({role, "readonly"}),
+            "x-hasura-default-role":  role,
         },
     }
 
@@ -239,7 +243,7 @@ def _create_token(args) -> int:
     signing = _seg({"alg": "HS256", "typ": "JWT"}) + b"." + _seg(payload)
     sig = base64.urlsafe_b64encode(hmac.new(secret.encode(), signing, hashlib.sha256).digest()).rstrip(b"=")
     print((signing + b"." + sig).decode())
-    print(f"\nrole=readonly · TTL {ttl}d · expires {exp:%Y-%m-%d}", file=sys.stderr)
+    print(f"\nrole={role} · TTL {ttl}d · expires {exp:%Y-%m-%d}", file=sys.stderr)
     return 0
 
 
@@ -282,7 +286,7 @@ def _hasura_init() -> int:
             "cve_ref": "refs", "cve_solution": "solutions", "cve_workaround": "workarounds",
             "cve_impact": "impacts", "cve_alias": "aliases", "cve_vendor": "vendors",
             "advisory_cve": "advisory_cve", "exploits": "exploits", "affected": "affected"}
-    OTHER = ["advisory", "adp", "cna", "cpe", "cwe", "sync_log", "cve_level"]
+    OTHER = ["advisory", "adp", "cna", "cpe", "cwe", "sync_log", "cve_level", "lve"]
     ALL = [SPINE] + list(ONE) + list(MANY) + OTHER
 
     print("Tracking tables...")
@@ -315,12 +319,21 @@ def _hasura_init() -> int:
             "table": {"schema": "public", "name": "cve_cwe"}, "name": "cwe",
             "using": manual("cwe", {"cwe_id": "cwe_id"})}})
 
-    print("Permissions (readonly select)...")
-    for role in ("readonly",):
+    print("Permissions (select)...")
+    for role in ("readonly", "lve_writer"):           # lve_writer = readonly + insert on lve
         for t in ALL:
             attempt(f"{t} [{role}]", {"type": "pg_create_select_permission", "args": {"source": "default",
                     "table": {"schema": "public", "name": t}, "role": role,
                     "permission": {"columns": "*", "filter": {}, "allow_aggregations": True}}})
+
+    print("Permission (lve_writer insert on lve)...")
+    attempt("lve [lve_writer insert]", {"type": "pg_create_insert_permission", "args": {"source": "default",
+            "table": {"schema": "public", "name": "lve"}, "role": "lve_writer",
+            "permission": {"columns": ["id", "title", "description", "severity", "coord",
+                                       "ecosystem", "package", "purl", "cpe23", "release",
+                                       "introduced", "fixed", "last_affected",
+                                       "version_scheme", "status", "created_by"],
+                           "check": {}}}})
 
     print("Reloading metadata...")
     call({"type": "reload_metadata", "args": {"reload_remote_schemas": False}})

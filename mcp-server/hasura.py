@@ -7,6 +7,7 @@ from the shared `HASURA_JWT_SECRET` — identical claims to the `create-token` C
 role (works when Hasura keeps `HASURA_GRAPHQL_UNAUTHORIZED_ROLE=anonymous`).
 """
 
+import contextvars
 import datetime
 import secrets
 
@@ -14,6 +15,12 @@ import httpx
 import jwt as pyjwt
 
 from config import Settings
+
+# The calling client's bearer token, stashed per-request by the auth middleware. When
+# set it is forwarded to Hasura verbatim, so the client's ROLE governs read vs write
+# (readonly can only read; lve_writer can also insert LVEs) — Hasura enforces it.
+request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "request_token", default=None)
 
 
 class HasuraClient:
@@ -26,6 +33,10 @@ class HasuraClient:
         await self._client.aclose()
 
     def _bearer(self) -> str | None:
+        # (0) Forward the calling client's token when present → its role gates read/write.
+        tok = request_token.get()
+        if tok:
+            return tok
         # (a) Reuse a token handed in verbatim — same token the GraphQL API uses.
         if self._s.graphql_token:
             return self._s.graphql_token

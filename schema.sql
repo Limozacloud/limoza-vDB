@@ -380,6 +380,57 @@ CREATE INDEX IF NOT EXISTS idx_affected_purl ON affected (purl);
 CREATE INDEX IF NOT EXISTS idx_affected_cpe  ON affected (cpe23);
 CREATE INDEX IF NOT EXISTS idx_affected_pkg  ON affected (ecosystem, package);
 
+-- ── LVE: local (user-defined) vulnerability entries ───────────────────────────
+-- Custom vuln records — the SOURCE OF TRUTH for things not in any public feed
+-- (e.g. "Notepad++ < 8.7.4"). The affected pass has an `lve` extractor that
+-- materialises each row into `affected` (origin='lve', cve_id=lve.id) so the matcher
+-- checks them like any CVE. Because this table is never touched by sync/ingest, the
+-- LVE rows survive every affected truncate/rebuild — they are re-seeded from here.
+-- Shape mirrors `affected` so materialisation is a near-copy.
+CREATE TABLE IF NOT EXISTS lve (
+    id             TEXT PRIMARY KEY CHECK (id ~ '^LVE-[0-9]{4}-[0-9]+$'),
+    title          TEXT NOT NULL,
+    description    TEXT,
+    severity       TEXT,
+    coord          TEXT NOT NULL CHECK (coord IN ('purl','cpe')),
+    ecosystem      TEXT,
+    package        TEXT,
+    purl           TEXT,
+    cpe23          TEXT,
+    release        TEXT,
+    introduced     TEXT,
+    fixed          TEXT,
+    last_affected  TEXT,
+    version_scheme TEXT NOT NULL DEFAULT 'generic',
+    status         TEXT NOT NULL DEFAULT 'affected' CHECK (status IN
+                     ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Keep affected in sync with lve immediately (so a freshly created LVE matches at once);
+-- the `lve` affected-extractor re-seeds the same rows on a full rebuild (truncate-safe).
+-- Runs with the function owner's rights, so a role that may only INSERT into lve still
+-- gets its affected row written.
+CREATE OR REPLACE FUNCTION lve_sync() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM affected WHERE origin = 'lve' AND cve_id = COALESCE(OLD.id, NEW.id);
+    IF TG_OP <> 'DELETE' THEN
+        INSERT INTO affected (cve_id, coord, ecosystem, package, purl, cpe23, release,
+                              introduced, fixed, last_affected, version_scheme, status,
+                              source, status_source, origin)
+        VALUES (NEW.id, NEW.coord, NEW.ecosystem, NEW.package, NEW.purl, NEW.cpe23,
+                NEW.release, NEW.introduced, NEW.fixed, NEW.last_affected,
+                COALESCE(NEW.version_scheme, 'generic'), NEW.status, 'lve', 'lve', 'lve');
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS lve_sync_trg ON lve;
+CREATE TRIGGER lve_sync_trg AFTER INSERT OR UPDATE OR DELETE ON lve
+    FOR EACH ROW EXECUTE FUNCTION lve_sync();
+
 -- ── L1–L3 advisory tiering (dashboard) ────────────────────────────────────────
 -- cve_levels(cve) returns the tiered advisory view for one CVE:
 --   L1 CNA        = assigner (cve_record → cna)
