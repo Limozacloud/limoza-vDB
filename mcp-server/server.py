@@ -118,7 +118,9 @@ async def match_bulk(components: list[dict]) -> dict:
     """
     results = []
     for c in components:
-        ident = c.get("purl") or c.get("cpe") or ""
+        purl, cpe = c.get("purl") or "", c.get("cpe") or ""
+        # a generic purl carries no ecosystem and never matches → prefer the CPE then
+        ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
         ver = c.get("version") or ""
         try:
             res = await match_check(hasura, ident, ver, c.get("release") or None)
