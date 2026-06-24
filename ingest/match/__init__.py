@@ -25,7 +25,34 @@ _SKIP = {"not_affected", "under_investigation", "unknown"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
 
+class _Build:
+    """Numeric dotted version (Microsoft/Windows builds: 10.0.19045.10, 17.10.6.1).
+
+    univers' GenericVersion compares lexically — "17.9" > "17.10", and Windows UBRs break at
+    every digit boundary (.9 vs .10, .99 vs .100). Build numbers are purely numeric, so we
+    compare component tuples as integers. Only used for the ``generic`` scheme.
+    """
+    __slots__ = ("p",)
+
+    def __init__(self, s):
+        self.p = tuple(int(x) for x in str(s).split("."))   # ValueError if non-numeric
+
+    def __eq__(self, o):
+        return isinstance(o, _Build) and self.p == o.p
+
+    def __lt__(self, o):
+        return self.p < o.p if isinstance(o, _Build) else NotImplemented
+
+    def __le__(self, o):
+        return self.p <= o.p if isinstance(o, _Build) else NotImplemented
+
+
 def _v(scheme, s):
+    if scheme == "generic":
+        try:
+            return _Build(s)                                # numeric build → integer compare
+        except (ValueError, AttributeError):
+            pass                                            # non-numeric → fall through
     cls = SCHEME.get(scheme, GenericVersion)
     for c in (cls, GenericVersion):
         try:

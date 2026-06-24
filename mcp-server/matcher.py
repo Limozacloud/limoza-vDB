@@ -29,7 +29,31 @@ _Q_CPE = ('query M($cpe:String!){'
           '{ cve_id source introduced fixed last_affected version_scheme status } }')
 
 
+class _Build:
+    """Numeric dotted version (Microsoft/Windows builds). univers' GenericVersion compares
+    lexically ("17.9" > "17.10"; Windows UBRs break at .9/.10, .99/.100), so for the generic
+    scheme we compare component tuples as integers."""
+    __slots__ = ("p",)
+
+    def __init__(self, s):
+        self.p = tuple(int(x) for x in str(s).split("."))
+
+    def __eq__(self, o):
+        return isinstance(o, _Build) and self.p == o.p
+
+    def __lt__(self, o):
+        return self.p < o.p if isinstance(o, _Build) else NotImplemented
+
+    def __le__(self, o):
+        return self.p <= o.p if isinstance(o, _Build) else NotImplemented
+
+
 def _v(scheme, s):
+    if scheme == "generic":
+        try:
+            return _Build(s)
+        except (ValueError, AttributeError):
+            pass
     for c in (SCHEME.get(scheme, GenericVersion), GenericVersion):
         try:
             return c(s)
