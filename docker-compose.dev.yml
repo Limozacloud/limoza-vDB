@@ -83,7 +83,7 @@ services:
       POSTGRES_DSN:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
       API_PORT:          "8770"
-    command: vdb api
+    command: api
     ports:
       - "8770:8770"
     depends_on:
