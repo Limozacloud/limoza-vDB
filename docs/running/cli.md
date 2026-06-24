@@ -32,9 +32,10 @@ target they act on everything.
 | [`affected`](#affected) | Derive the L4 affected-version layer (after sync + ingest) |
 | [`match`](#match) | Version-compare a scanned component against the affected layer |
 | [`daily`](#daily) | Full pipeline (schema → sync → ingest → affected → hasura-init) — the scheduler's job |
+| [`api`](#api) | Serve the [REST API](rest-api.md) (bulk `/match` + `/lve`) |
 | [`schema`](#schema) | Apply the database schema |
 | [`hasura-init`](#hasura-init) | Track tables + relationships + read-only permissions |
-| [`create-token`](#create-token) | Mint a read-only GraphQL JWT |
+| [`create-token`](#create-token) | Mint a GraphQL/API JWT (read-only, or a write role) |
 
 ## sync
 
@@ -112,6 +113,16 @@ and recorded in `sync_log`); a hard failure in schema / affected / hasura-init a
 It is a single subcommand on purpose — the scheduler invokes `vdb daily`, never a shell
 pipeline (ofelia doesn't shell-parse its `command`, so `sh -c "a && b"` would break).
 
+## api
+
+Serves the [REST API](rest-api.md) — bulk `POST /match` and `POST /lve` for batch callers
+(a scanner / pipeline), no LLM and no per-call token cost. This is the `command` of the
+`api` compose service; run it directly to debug.
+
+```bash
+docker compose exec ingest vdb api      # listens on $API_PORT (default 8770)
+```
+
 ## schema
 
 Applies `schema.sql`. Idempotent — safe to run repeatedly; run it to apply schema
@@ -134,14 +145,17 @@ docker compose exec ingest vdb hasura-init
 
 ## create-token
 
-Mints a read-only JWT for the GraphQL API (default TTL 1 day, role `readonly`).
+Mints a JWT for the GraphQL/REST API (default TTL 1 day, role `readonly`).
 Requires `HASURA_JWT_SECRET` in `.env`.
 
 ```bash
-docker compose exec ingest vdb create-token            # 1-day token
-docker compose exec ingest vdb create-token --ttl 90   # 90-day token
+docker compose exec ingest vdb create-token                       # 1-day read-only token
+docker compose exec ingest vdb create-token --ttl 90             # 90-day token
+docker compose exec ingest vdb create-token --role lve_writer    # write token (read + create LVEs)
 ```
 
+`--role lve_writer` adds the write role (it also carries `readonly`, so it can read and
+write); a default token is read-only. Hasura / the REST `/lve` endpoint enforce the role.
 See [GraphQL & Hasura → tokens](graphql.md#read-only-tokens).
 
 ## Running ad-hoc Python

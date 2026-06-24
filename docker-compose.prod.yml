@@ -84,6 +84,27 @@ services:
       - "traefik.http.routers.vdb-mcp.tls.certresolver=myresolver"
       - "traefik.http.services.vdb-mcp.loadbalancer.server.port=8765"
 
+  api:
+    container_name: limoza-vdb-api
+    image: ghcr.io/limozacloud/limoza-vdb:latest
+    env_file: .env
+    environment:
+      POSTGRES_DSN:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
+      API_PORT:          "8770"
+    command: api
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks: [default, traefik]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.vdb-api.rule=Host(`vdb-api.limoza.cloud`)"
+      - "traefik.http.routers.vdb-api.entrypoints=websecure"
+      - "traefik.http.routers.vdb-api.tls.certresolver=myresolver"
+      - "traefik.http.services.vdb-api.loadbalancer.server.port=8770"
+
   ofelia:
     container_name: limoza-vdb-ofelia
     image: mcuadros/ofelia:latest

@@ -18,7 +18,8 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from config import load_settings
-from hasura import HasuraClient
+from hasura import HasuraClient, request_token
+from lve import create_lve as _create_lve
 from matcher import check as match_check
 from queries import FULL_CVE_SCAN
 
@@ -100,6 +101,73 @@ async def check_vulnerable(purl: str, version: str, release: str = "") -> dict:
     }
 
 
+@mcp.tool()
+async def match_bulk(components: list[dict]) -> dict:
+    """Bulk version-check a whole scan's components against the affected data (public CVEs
+    AND custom LVEs) in one call — for a scanner/agent that has many components.
+
+    Each component is an object: {"purl"|"cpe": <identifier>, "version": <installed>, "release"?: <distro>}
+      - purl:  pkg:rpm/redhat/openssl · pkg:deb/ubuntu/curl (release el9 / jammy / …) · pkg:pypi/django
+      - cpe:   a CPE 2.3 string for Windows / Microsoft / binary software
+
+    Returns, per component, a status ("vulnerable" | "compliant" | "unknown") and the
+    matching CVEs (id, fixed version, status, source), plus summary counts.
+
+    Args:
+        components: list of {purl|cpe, version, release?} objects.
+    """
+    results = []
+    for c in components:
+        ident = c.get("purl") or c.get("cpe") or ""
+        ver = c.get("version") or ""
+        try:
+            res = await match_check(hasura, ident, ver, c.get("release") or None)
+            cves = res["cves"]
+            results.append({"component": ident, "version": ver,
+                            "status": "vulnerable" if cves else "compliant",
+                            "count": len(cves), "cves": cves})
+        except Exception as e:
+            results.append({"component": ident, "version": ver, "status": "unknown", "error": str(e)})
+    return {
+        "total": len(results),
+        "vulnerable": sum(1 for r in results if r["status"] == "vulnerable"),
+        "compliant": sum(1 for r in results if r["status"] == "compliant"),
+        "unknown": sum(1 for r in results if r["status"] == "unknown"),
+        "results": results,
+    }
+
+
+@mcp.tool()
+async def create_lve(product: str, title: str, fixed: str = "", introduced: str = "",
+                     last_affected: str = "", severity: str = "", description: str = "",
+                     version_scheme: str = "", status: str = "affected") -> dict:
+    """Create a custom vulnerability entry (LVE) — your own "CVE" for something not in the
+    public feeds (e.g. "Notepad++ < 8.7.4"). Once created it is matched immediately by
+    check_vulnerable / match_bulk and survives rebuilds.
+
+    Requires a token with the `lve_writer` role (mint one with
+    `vdb create-token --role lve_writer`); a read-only token is rejected by the database.
+
+    Args:
+        product: the affected product — a purl (pkg:generic/notepad++, pkg:pypi/<name>, …)
+                 or a CPE 2.3 string.
+        title:   short description, e.g. "Notepad++ < 8.7.4 buffer overflow".
+        fixed:   the version that fixes it (installed < fixed ⇒ vulnerable); omit for "no fix yet".
+        introduced / last_affected: optional range bounds (last_affected = inclusive upper).
+        severity / description: optional metadata.
+        version_scheme: comparison scheme (rpm / deb / semver / pep440 / generic — default generic).
+        status: canonical status (default "affected"; "fixed" pairs with a `fixed` version).
+    """
+    try:
+        row = await _create_lve(hasura, product, title, fixed=fixed or None,
+                                introduced=introduced or None, last_affected=last_affected or None,
+                                severity=severity or None, description=description or None,
+                                version_scheme=version_scheme or None, status=status)
+        return {"created": True, **row}
+    except Exception as e:
+        return {"created": False, "error": str(e)}
+
+
 class BearerAuthMiddleware:
     """Pure-ASGI JWT gate — accepts tokens minted by `ingest create-token`."""
 
@@ -122,6 +190,7 @@ class BearerAuthMiddleware:
         except pyjwt.PyJWTError:
             await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
             return
+        request_token.set(token)        # forward to Hasura → client role gates read/write
         await self.app(scope, receive, send)
 
 

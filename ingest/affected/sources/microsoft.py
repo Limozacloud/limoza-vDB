@@ -15,6 +15,7 @@ Linux) are dropped — we only store CPEs a scanner can actually produce.
 """
 import glob
 import json
+import re
 from pathlib import Path
 
 from ingest.affected import cpe_norm, row
@@ -22,6 +23,27 @@ from ingest.affected import status as st
 from ingest.core.cveid import normalize
 
 ORIGIN = SOURCE = "microsoft"
+
+# Office family uses the 16.0.MMMM.PPPP build scheme; MSRC sometimes drops the "16.0."
+_OFFICE = ("office", "excel", "word", "outlook", "powerpoint", "onenote", "visio",
+           "project", "access", "publisher", "skype", "365")
+_BUILD = re.compile(r"^\d+(\.\d+)+$")
+
+
+def _norm_build(fb: str, product: str):
+    """MSRC FixedBuild → a comparable build, or None when it isn't build-matchable.
+
+    - Click-to-Run Office auto-updates → MSRC gives a URL (not a build) → None (dropped;
+      C2R has no fixed build to compare, so a build verdict would be a false positive).
+    - MSI Office sometimes drops the leading "16.0." (e.g. "5215.1000") → restore it so it
+      compares against the scanner's full build (16.0.MMMM.PPPP).
+    """
+    fb = (fb or "").strip()
+    if not _BUILD.match(fb):                       # URL / prose → not a build
+        return None
+    if fb.count(".") == 1 and any(o in product for o in _OFFICE):
+        return "16.0." + fb
+    return fb
 
 
 def _product_cpes(doc: dict) -> dict:
@@ -47,20 +69,27 @@ def _doc_rows(doc: dict):
             continue
         seen = set()
         for r in v.get("Remediations") or []:
-            fb = r.get("FixedBuild")
-            if not fb:
+            fb_raw = r.get("FixedBuild")
+            if not fb_raw:
                 continue
             sub = r.get("SubType")
             for pid in r.get("ProductID") or []:
                 cpe = pmap.get(pid)
                 if not cpe:
                     continue
+                fb = _norm_build(fb_raw, cpe.split(":")[4])
+                if fb is None:           # URL (C2R auto-update) / non-build → not matchable, drop
+                    continue
                 key = (cpe, fb)
                 if key in seen:
                     continue
                 seen.add(key)
+                # scope to this build lineage (major.minor) so a different scheme under the
+                # same product — e.g. Office-for-Mac 16.55.x vs Windows-Office 16.0.x — can't
+                # cross-match: a 16.0 host is below the 16.55 `introduced` and is skipped.
+                intro = ".".join(fb.split(".")[:2])
                 yield row(cve_id=cid, coord="cpe", cpe23=cpe, package=cpe.split(":")[4],
-                          fixed=fb, version_scheme="generic",
+                          introduced=intro, fixed=fb, version_scheme="generic",
                           status=st.FIXED, status_raw=sub,
                           source=SOURCE, status_source="own", origin=ORIGIN)
 

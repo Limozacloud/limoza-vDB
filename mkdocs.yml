@@ -17,6 +17,7 @@ nav:
     - Ingest CLI: running/cli.md
     - GraphQL & Hasura: running/graphql.md
     - MCP server: running/mcp.md
+    - REST API: running/rest-api.md
   - Pipeline:
     - Overview: ingest/index.md
     - Data model: ingest/schema.md

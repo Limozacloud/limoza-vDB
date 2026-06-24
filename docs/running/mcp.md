@@ -31,6 +31,8 @@ read-only [GraphQL API](graphql.md).
 |------|-------------|
 | `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, solutions/workarounds, impacts, vendor assessments, advisories, exploits, EPSS/KEV/SSVC triage signals, a sample of affected packages, and the L1–L3 advisory tiers. |
 | `check_vulnerable(purl, version, release)` | Version-compares a scanned component against the [affected-version data](../affected-versions.md): "is X version Y vulnerable?" Accepts a **purl** (rpm/deb/ecosystem — `release` like el9 / jammy / bookworm required for OS packages, omitted for language ecosystems) **or a CPE 2.3 string** (Windows / Microsoft / binary software — build-compared). Returns the matching CVEs with fixed version, status, and source. |
+| `match_bulk(components)` | Like `check_vulnerable` but for a **list** of components in one call — each `{purl\|cpe, version, release?}` → per-component `vulnerable`/`compliant` + CVEs, plus summary counts. (For huge batches with no token cost, prefer the [REST API](rest-api.md).) |
+| `create_lve(product, title, …)` | Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)) — your own "CVE" (e.g. "Notepad++ < 8.7.4"). Matched immediately afterwards. **Requires a token with the `lve_writer` role** (a read-only token is rejected). |
 
 ## Enable it
 

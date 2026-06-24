@@ -81,6 +81,23 @@ always land on the same key:
 - **Name fallback.** Older MSRC products carry no CPE; `from_name()` derives one from the
   product name and validates it the same way.
 
+## LVE (custom entries)
+
+**Local Vulnerability Entries** are your own vuln records for things not in any public
+feed (e.g. "Notepad++ < 8.7.4"). They live in the `lve` table — the source of truth — and
+are **matched exactly like a CVE**:
+
+- An `AFTER` trigger materialises each `lve` row into `affected` (`origin='lve'`,
+  `cve_id` = the LVE id) **immediately**, so a new entry matches at once.
+- The `lve` affected-extractor re-seeds those rows on every `vdb affected` run, so they
+  **survive any truncate/rebuild** — re-derived from the `lve` table, like a distro's rows
+  from `/data`.
+- The matcher needs no special case — LVEs are ordinary `affected` rows.
+
+Create one via the REST [`POST /lve`](running/rest-api.md) or the MCP
+[`create_lve`](running/mcp.md#tools) tool — both require an `lve_writer`
+[token](running/cli.md#create-token). Ids are `LVE-YYYY-NNNN`.
+
 ## The matcher
 
 The shared matcher (`ingest/match`) holds a scanned component against `affected`,
