@@ -116,6 +116,7 @@ def _cpe_verdict(installed, rows):
             lo = _v(scheme, intro)
             if lo is not None and iv < lo:
                 continue
+        had_bounds = any(r["fixed"] or r["last_affected"] for r in group)
         fixes = [(r, _v(scheme, r["fixed"])) for r in group if r["fixed"]]
         fixes = [(r, fv) for r, fv in fixes if fv is not None]
         lasts = [(r, _v(scheme, r["last_affected"])) for r in group if r["last_affected"]]
@@ -127,8 +128,10 @@ def _cpe_verdict(installed, rows):
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
                 hits.append(lasts[0][0])
+        elif had_bounds:
+            continue                    # bound existed but didn't parse → don't flag (no FP)
         else:
-            hits.append(group[0])
+            hits.append(group[0])       # genuinely no bound → open-ended affected
     return hits
 
 
