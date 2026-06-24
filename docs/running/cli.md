@@ -31,6 +31,7 @@ target they act on everything.
 | [`ingest`](#ingest) | Write synced data into the database |
 | [`affected`](#affected) | Derive the L4 affected-version layer (after sync + ingest) |
 | [`match`](#match) | Version-compare a scanned component against the affected layer |
+| [`daily`](#daily) | Full pipeline (schema → sync → ingest → affected → hasura-init) — the scheduler's job |
 | [`schema`](#schema) | Apply the database schema |
 | [`hasura-init`](#hasura-init) | Track tables + relationships + read-only permissions |
 | [`create-token`](#create-token) | Mint a read-only GraphQL JWT |
@@ -95,6 +96,21 @@ docker compose exec ingest vdb match 'cpe:2.3:o:microsoft:windows_server_2012:6.
 
 This is the same engine behind the MCP [`check_vulnerable`](mcp.md#tools) tool. See
 [Affected versions → the matcher](../affected-versions.md#the-matcher).
+
+## daily
+
+The complete pipeline in order — **schema → sync → ingest → affected → hasura-init** —
+as one command. This is exactly what the [scheduler](docker.md#scheduled-runs) runs
+every night.
+
+```bash
+docker compose exec ingest vdb daily
+```
+
+Every phase runs regardless of per-source `sync`/`ingest` failures (those are isolated
+and recorded in `sync_log`); a hard failure in schema / affected / hasura-init aborts.
+It is a single subcommand on purpose — the scheduler invokes `vdb daily`, never a shell
+pipeline (ofelia doesn't shell-parse its `command`, so `sh -c "a && b"` would break).
 
 ## schema
 

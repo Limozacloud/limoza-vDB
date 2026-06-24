@@ -3,6 +3,7 @@
   python -m ingest.run schema                  apply schema.sql
   python -m ingest.run sync   [target...]      download source data (default: all)
   python -m ingest.run ingest [target...]      write downloaded data into the DB
+  python -m ingest.run daily                   full pipeline: schema → sync → ingest → affected → hasura-init
 
 A target is a source key (epss, kev, …, exploitdb, …) or a group (exploits).
 Each source has a module dir with sync.py/ingest.py exposing run(); a sync run()
@@ -90,6 +91,9 @@ def main(argv: list[str]) -> int:
     if cmd == "match":
         return _match(argv[1:])
 
+    if cmd == "daily":
+        return _daily()
+
     if cmd not in ("sync", "ingest"):
         print(f"unknown command: {cmd}\n{__doc__}")
         return 1
@@ -132,6 +136,26 @@ def main(argv: list[str]) -> int:
         conn.close()
 
     return 1 if failures else 0
+
+
+def _daily() -> int:
+    """Full pipeline (the scheduler's job): schema → sync → ingest → affected → hasura-init.
+
+    Runs every phase regardless of per-source sync/ingest failures (those are isolated and
+    logged in sync_log); a hard failure in schema / affected / hasura-init propagates. This
+    is one command on purpose — the scheduler invokes `vdb daily`, not a shell pipeline.
+    """
+    from ingest.core.db import apply_schema
+    print("== daily: schema ==", flush=True)
+    apply_schema()
+    print("== daily: sync ==", flush=True)
+    main(["sync"])
+    print("== daily: ingest ==", flush=True)
+    main(["ingest"])
+    print("== daily: affected ==", flush=True)
+    _affected()
+    print("== daily: hasura-init ==", flush=True)
+    return _hasura_init()
 
 
 def _log_sync(conn, source, result, started, log_run) -> None:
