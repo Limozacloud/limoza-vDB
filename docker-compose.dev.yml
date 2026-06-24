@@ -74,6 +74,22 @@ services:
       - hasura
     restart: unless-stopped
 
+  api:
+    container_name: limoza-vdb-api
+    build: .
+    image: limoza-vdb-ingest
+    env_file: .env
+    environment:
+      POSTGRES_DSN:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
+      API_PORT:          "8770"
+    command: vdb api
+    ports:
+      - "8770:8770"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
   ofelia:
     container_name: limoza-vdb-ofelia
     image: mcuadros/ofelia:latest

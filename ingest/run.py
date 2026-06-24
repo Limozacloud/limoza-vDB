@@ -4,6 +4,7 @@
   python -m ingest.run sync   [target...]      download source data (default: all)
   python -m ingest.run ingest [target...]      write downloaded data into the DB
   python -m ingest.run daily                   full pipeline: schema → sync → ingest → affected → hasura-init
+  python -m ingest.run api                     serve the REST API (POST /match · POST /lve · /healthz)
 
 A target is a source key (epss, kev, …, exploitdb, …) or a group (exploits).
 Each source has a module dir with sync.py/ingest.py exposing run(); a sync run()
@@ -93,6 +94,10 @@ def main(argv: list[str]) -> int:
 
     if cmd == "daily":
         return _daily()
+
+    if cmd == "api":
+        from ingest.api import main as api_main
+        return api_main()
 
     if cmd not in ("sync", "ingest"):
         print(f"unknown command: {cmd}\n{__doc__}")

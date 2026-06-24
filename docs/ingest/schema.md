@@ -210,6 +210,15 @@ Tracked in Hasura (related from `cve`); the
 [matcher](../affected-versions.md#the-matcher) version-compares a scanned component
 against it (`vdb match`, MCP `check_vulnerable`).
 
+### `lve`
+
+User-defined vulnerability entries ([LVE](../affected-versions.md#lve-custom-entries)) —
+the source of truth for vulns not in any public feed. Same shape as `affected` (id =
+`LVE-YYYY-NNNN`, plus `title` / `description` / `severity` / `created_by`). An `AFTER`
+trigger (`lve_sync`) materialises each row into `affected` (`origin='lve'`) immediately,
+and the `lve` affected-extractor re-seeds it on every rebuild — so LVEs survive a
+truncate. Insert is gated by the `lve_writer` Hasura role.
+
 ---
 
 ## Operations

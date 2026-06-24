@@ -24,6 +24,7 @@ cp docker-compose.dev.yml docker-compose.yml   # then `docker compose …` just 
 | `pgadmin` | Database UI (development convenience) | `5050` |
 | `traefik` | Reverse proxy / TLS termination (production) | `80`/`443` |
 | `mcp` | Optional [MCP server](mcp.md) for LLM clients | `8765` |
+| `api` | [REST API](rest-api.md) — bulk `/match` + `/lve` for batch callers | `8770` |
 
 The `ingest` service runs continuously as an idle process (`sleep infinity`) so that
 `docker compose exec` and the scheduler can run commands inside it without spawning
