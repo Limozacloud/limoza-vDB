@@ -20,7 +20,7 @@ cp docker-compose.dev.yml docker-compose.yml   # then `docker compose …` just 
 | `postgres` | The database | `127.0.0.1:5432` |
 | `ingest` | The sync/ingest CLI (one idle container, see below) | — |
 | `hasura` | Serves the schema as a read-only GraphQL API | `8080` |
-| `ofelia` | Cron scheduler that runs the sync/ingest pipeline | — |
+| `ofelia` | Cron scheduler — runs `vdb daily` (full pipeline) nightly | — |
 | `pgadmin` | Database UI (development convenience) | `5050` |
 | `traefik` | Reverse proxy / TLS termination (production) | `80`/`443` |
 | `mcp` | Optional [MCP server](mcp.md) for LLM clients | `8765` |
@@ -68,6 +68,11 @@ docker compose exec ingest vdb hasura-init
 After this, the GraphQL endpoint is at `http://localhost:8080/v1/graphql` and the
 Hasura console at `http://localhost:8080/console`.
 
+!!! tip "One-shot full run"
+    Steps 4-6 plus a full sync/ingest of every source are exactly what
+    [`vdb daily`](cli.md#daily) does — `docker compose exec ingest vdb daily`. The
+    `ofelia` scheduler runs it nightly (see [Scheduled runs](#scheduled-runs)).
+
 !!! note "Configuration via `.env`"
     All services read from `.env` (`env_file: .env`). Secrets — the database password,
     `HASURA_ADMIN_SECRET`, `HASURA_JWT_SECRET`, `NVD_API_KEY` — are **never** committed;
@@ -86,6 +91,18 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## Scheduled runs
 
-The `ofelia` service runs the CLI on a cron schedule, defined in `config/ofelia.ini`
-and `config/schedule.json`, so each source is kept fresh by periodic `sync` + `ingest`
-runs without manual intervention. See the [Ingest CLI](cli.md).
+The `ofelia` service runs the full pipeline on a cron schedule defined in
+`config/ofelia.ini`, so the data stays fresh without manual intervention. The default
+job runs [`vdb daily`](cli.md#daily) — schema → sync → ingest → affected → hasura-init —
+every night at **05:00** (after the upstream CVE List refresh ~03:00).
+
+```ini
+[job-exec "daily"]
+schedule  = 0 0 5 * * *
+container = limoza-vdb-ingest
+command   = vdb daily
+```
+
+Edit the schedule and apply with `docker compose restart ofelia`. The command is the
+single `vdb daily` subcommand on purpose — ofelia splits `command` on spaces and does
+not shell-parse it, so a `sh -c "a && b"` pipeline would break.
