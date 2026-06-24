@@ -33,9 +33,15 @@ mcp = FastMCP("limoza-vdb", stateless_http=True, host=settings.host, port=settin
 # Reply template the consuming LLM must follow for get_cve_detail — returned in the result
 # (`output_format`) so it sits right next to the data, and referenced from the docstring.
 CVE_OUTPUT_FORMAT = """\
-Render your reply to the user as Markdown using EXACTLY the following structure, headings and \
-order. Fill every field from this tool's data ONLY. If a value is missing, write "—" or omit \
-that row/section — never invent data and never add sections.
+Respond ENTIRELY IN ENGLISH, regardless of the language of the question. Render the reply as \
+Markdown using EXACTLY the following structure, headings and order.
+
+CRITICAL — DO NOT HALLUCINATE: every value (descriptions, scores, and ESPECIALLY fixed / \
+affected versions) MUST be copied verbatim from THIS tool's result. If a field is empty or \
+missing — e.g. a SUSE "Fixed Version" — render "—". An empty value means the upstream source \
+published none; do NOT fill it from your own training knowledge, from other CVEs, or by \
+guessing, and NEVER emit a version, score or fact that is not present in the data. Do not add \
+or reorder sections.
 
 # {CVE-ID}
 
@@ -86,9 +92,10 @@ Debian, Oracle, Red Hat, …)
 async def get_cve_detail(cve_id: str) -> dict:
     """Return all known data for a single CVE from the limoza-vDB vulnerability database.
 
-    IMPORTANT: Base your answer EXCLUSIVELY on the data returned by this tool.
-    Do NOT supplement with your own training knowledge about this CVE.
-    If a field is empty or missing in the result, state that explicitly — do not fill gaps from memory.
+    IMPORTANT: Answer in ENGLISH and base your reply EXCLUSIVELY on the data returned by this tool.
+    Do NOT supplement with your own training knowledge about this CVE. If a field is empty or
+    missing (e.g. a distro's fixed version) render "—" — an empty value means the source published
+    none; never fill gaps from memory, from other CVEs, or by guessing.
 
     OUTPUT FORMAT: Render your reply to the user as Markdown using EXACTLY the structure given in
     the result's ``output_format`` field (same headings and order). Fill each field from the data;
