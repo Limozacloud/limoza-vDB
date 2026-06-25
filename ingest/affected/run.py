@@ -6,13 +6,14 @@ and stream-insert in batches so the swap is dashboard-safe.
 """
 from ingest.affected import delete_scope, flush
 from ingest.affected.sources import (almalinux, cvelistv5, debian, ghsa, lve, microsoft,
-                                     oracle, osv, redhat, rocky, suse, ubuntu)
+                                     nvd, oracle, osv, redhat, rocky, suse, ubuntu)
 
 # order matters only for the clones (almalinux/rocky/oracle inherit redhat's rows),
 # so redhat must come first; otherwise each source owns its own slice.
-# `lve` materialises the user-defined lve table → affected (truncate-safe re-seed).
+# `nvd` is the authoritative cpe lane (NVD configurations); `lve` materialises the
+# user-defined lve table → affected (truncate-safe re-seed).
 EXTRACTORS = (redhat, suse, ubuntu, debian, almalinux, rocky, oracle, cvelistv5,
-              microsoft, osv, ghsa, lve)
+              microsoft, nvd, osv, ghsa, lve)
 BATCH = 5_000
 
 
