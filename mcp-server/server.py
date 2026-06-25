@@ -30,14 +30,76 @@ hasura = HasuraClient(settings)
 
 mcp = FastMCP("limoza-vdb", stateless_http=True, host=settings.host, port=settings.port)
 
+# Reply template the consuming LLM must follow for get_cve_detail — returned in the result
+# (`output_format`) so it sits right next to the data, and referenced from the docstring.
+CVE_OUTPUT_FORMAT = """\
+Respond ENTIRELY IN ENGLISH, regardless of the language of the question. Render the reply as \
+Markdown using EXACTLY the following structure, headings and order.
+
+CRITICAL — DO NOT HALLUCINATE: every value (descriptions, scores, and ESPECIALLY fixed / \
+affected versions) MUST be copied verbatim from THIS tool's result. If a field is empty or \
+missing — e.g. a SUSE "Fixed Version" — render "—". An empty value means the upstream source \
+published none; do NOT fill it from your own training knowledge, from other CVEs, or by \
+guessing, and NEVER emit a version, score or fact that is not present in the data. Do not add \
+or reorder sections.
+
+# {CVE-ID}
+
+## Description
+{description}
+
+## CVSS
+| Version | Score | Severity | Vector |
+|---------|-------|----------|--------|
+| {cvss_version} | {score} | {severity} | {vector} |
+
+## CWE
+- {CWE-ID}: {title}
+
+## Scoring & Prioritization
+- **EPSS:** {score} ({percentile} percentile, as of {date})
+- **SSVC:**
+  - Exploitation: {poc / active / none}
+  - Automatable: {yes / no}
+  - Technical Impact: {partial / total}
+
+## Known Exploits
+{exploit_status} — {sources / links}
+
+## Affected Versions / Packages
+### {Distro/Ecosystem} ({rpm/deb/apk})
+| Package | Branch/Release | Status | Fixed Version |
+|---------|----------------|--------|---------------|
+| {package} | {branch} | {affected/fixed/not_affected} | {version} |
+
+(Repeat one "###" block per distro/ecosystem present in the data: SUSE, Ubuntu, AlmaLinux, \
+Debian, Oracle, Red Hat, …)
+
+### Container Images (optional)
+- {image} — {status}
+
+## Not Affected
+- {versions / components}
+
+## Solutions / Workarounds
+- **Fix:** {upgrade instruction}
+- **Mitigation:** {mitigation, or "none available / does not meet the criteria"}
+- **References:** {links}
+"""
+
 
 @mcp.tool()
 async def get_cve_detail(cve_id: str) -> dict:
     """Return all known data for a single CVE from the limoza-vDB vulnerability database.
 
-    IMPORTANT: Base your answer EXCLUSIVELY on the data returned by this tool.
-    Do NOT supplement with your own training knowledge about this CVE.
-    If a field is empty or missing in the result, state that explicitly — do not fill gaps from memory.
+    IMPORTANT: Answer in ENGLISH and base your reply EXCLUSIVELY on the data returned by this tool.
+    Do NOT supplement with your own training knowledge about this CVE. If a field is empty or
+    missing (e.g. a distro's fixed version) render "—" — an empty value means the source published
+    none; never fill gaps from memory, from other CVEs, or by guessing.
+
+    OUTPUT FORMAT: Render your reply to the user as Markdown using EXACTLY the structure given in
+    the result's ``output_format`` field (same headings and order). Fill each field from the data;
+    write "—" for missing values or omit empty rows/sections. Do not add or reorder sections.
 
     Returns the CVE record (assigner/state/dates), descriptions, CVSS scores, CWE
     weaknesses, references, solutions/workarounds, impacts, aliases, per-vendor
@@ -63,6 +125,7 @@ async def get_cve_detail(cve_id: str) -> dict:
         "cve_id": cve_id,
         "record": rec,
         "advisory_tiers": data.get("cve_levels") or [],
+        "output_format": CVE_OUTPUT_FORMAT,
     }
 
 
@@ -118,7 +181,9 @@ async def match_bulk(components: list[dict]) -> dict:
     """
     results = []
     for c in components:
-        ident = c.get("purl") or c.get("cpe") or ""
+        purl, cpe = c.get("purl") or "", c.get("cpe") or ""
+        # a generic purl carries no ecosystem and never matches → prefer the CPE then
+        ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
         ver = c.get("version") or ""
         try:
             res = await match_check(hasura, ident, ver, c.get("release") or None)

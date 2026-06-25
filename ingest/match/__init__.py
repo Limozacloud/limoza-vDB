@@ -19,10 +19,27 @@ SCHEME = {
     "rpm": RpmVersion, "deb": DebianVersion, "apk": AlpineLinuxVersion,
     "semver": SemverVersion, "pep440": PypiVersion, "maven": MavenVersion,
     "golang": GolangVersion, "gem": RubygemsVersion, "nuget": NugetVersion,
-    "composer": ComposerVersion, "generic": GenericVersion,
+    # `generic` is the unmanaged / CPE lane (Microsoft & SQL builds, NVD CPE configs, bundled
+    # binaries, LVE). MavenVersion is its comparator: it tokenises numeric + alphanumeric, so
+    # numeric parts rank numerically (17.9 < 17.10, UBR .9 < .10) AND letter versions work
+    # (openssl 1.1.1w < 1.1.1x) — without the lexical breakage of univers' GenericVersion.
+    "composer": ComposerVersion, "generic": MavenVersion,
 }
 _SKIP = {"not_affected", "under_investigation", "unknown"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
+
+# scanners emit the purl distro as ID-VERSION_ID (debian-11, ubuntu-22.04); the Debian/Ubuntu
+# trackers — and so our affected rows — are keyed by codename. Map to codename; pass through
+# values that are already a codename.
+_DISTRO_CODENAME = {
+    "debian-7": "wheezy", "debian-8": "jessie", "debian-9": "stretch",
+    "debian-10": "buster", "debian-11": "bullseye", "debian-12": "bookworm",
+    "debian-13": "trixie", "debian-14": "forky", "debian-sid": "sid",
+    "ubuntu-14.04": "trusty", "ubuntu-16.04": "xenial", "ubuntu-18.04": "bionic",
+    "ubuntu-20.04": "focal", "ubuntu-22.04": "jammy", "ubuntu-22.10": "kinetic",
+    "ubuntu-23.04": "lunar", "ubuntu-23.10": "mantic", "ubuntu-24.04": "noble",
+    "ubuntu-24.10": "oracular", "ubuntu-25.04": "plucky",
+}
 
 
 def _v(scheme, s):
@@ -66,7 +83,9 @@ def parse_purl(purl):
     # maven: group:artifact (purl uses "/", but GHSA/OSV store the ":" form);
     # other ecosystems: name as-is (django, @scope/x, …)
     if ptype in ("rpm", "deb"):
-        name = parts[-1]
+        # Debian/RPM advisories are keyed by SOURCE package; scanners put the binary in the
+        # purl name and the source in the `upstream` qualifier (zlib1g-dev → upstream=zlib).
+        name = quals.get("upstream") or parts[-1]
     elif ptype == "maven":
         name = ":".join(parts[1:])
     else:
@@ -82,7 +101,8 @@ def _lane(ptype, version, quals, release=None):
             release = f"el{m.group(1)}" if m else None
         return "rpm", release
     if ptype == "deb":
-        return "deb", release or quals.get("distro")
+        rel = release or quals.get("distro")
+        return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
     return ptype, release          # ecosystem package — release stays None
 
 

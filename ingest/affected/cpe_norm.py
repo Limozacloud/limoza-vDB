@@ -53,6 +53,13 @@ def _resolve(part, vendor, product, update):
         cands.append((m.group(1), m.group(2)))        # _r2 in product → update field
     if upd:
         cands.append((product + "_" + upd, None))     # or update folded into product
+    # MSRC bakes a version into some product names (odbc_driver_18_for_sql_server,
+    # ole_db_driver_19_for_sql_server) that NVD carries without it. Try the stripped form
+    # as a LAST resort — an embedded numeric token only (followed by "_"), so trailing years
+    # that NVD keeps (office_2016, sql_server_2019) are left untouched.
+    stripped = re.sub(r"_\d+(?=_)", "", product)
+    if stripped != product:
+        cands.append((stripped, upd))
     if _VP is not None:
         for prod, u in cands:
             if u and (vendor, prod, u) in _VPU:

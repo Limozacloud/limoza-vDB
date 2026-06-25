@@ -67,7 +67,10 @@ def _bulk_match(components: list) -> list:
     try:
         cache, results = {}, []
         for c in components:
-            ident = c.get("purl") or c.get("cpe") or ""
+            purl, cpe = c.get("purl") or "", c.get("cpe") or ""
+            # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
+            # the CPE then. A real ecosystem purl (rpm/deb/pypi/…) wins over the CPE.
+            ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
             ver = c.get("version") or ""
             rel = c.get("release") or None
             k = (ident, ver, rel)
