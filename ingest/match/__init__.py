@@ -25,7 +25,10 @@ SCHEME = {
     # (openssl 1.1.1w < 1.1.1x) — without the lexical breakage of univers' GenericVersion.
     "composer": ComposerVersion, "generic": MavenVersion,
 }
-_SKIP = {"not_affected", "under_investigation", "unknown"}
+# wont_fix is excluded from the vulnerable verdict (Debian no-dsa "ignored", urgency
+# "unimportant"/"end-of-life", …): the finding stays in the DB with its justification so it's
+# auditable via GraphQL, but it doesn't count as an actionable vulnerability in /match.
+_SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
 # scanners emit the purl distro as ID-VERSION_ID (debian-11, ubuntu-22.04); the Debian/Ubuntu
