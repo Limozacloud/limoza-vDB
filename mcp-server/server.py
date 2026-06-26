@@ -21,7 +21,7 @@ from config import load_settings
 from hasura import HasuraClient, request_token
 from lve import create_lve as _create_lve
 from matcher import check as match_check
-from queries import FULL_CVE_SCAN
+from queries import EXPLAIN_STATUS, FULL_CVE_SCAN
 
 log = logging.getLogger("limoza-mcp")
 
@@ -127,6 +127,106 @@ async def get_cve_detail(cve_id: str) -> dict:
         "advisory_tiers": data.get("cve_levels") or [],
         "output_format": CVE_OUTPUT_FORMAT,
     }
+
+
+# ── explain_status: provenance for a CVE's affected-layer status ──────────────────────────
+_SOURCE_LABEL = {
+    "debian": "Debian Security Tracker", "ubuntu": "Ubuntu Security",
+    "redhat": "Red Hat", "almalinux": "AlmaLinux (RHEL rebuild)",
+    "rocky": "Rocky Linux (RHEL rebuild)", "oracle": "Oracle Linux", "suse": "SUSE",
+    "nvd": "NVD (CPE configuration)", "cvelistv5": "CVE Record (CNA)",
+    "ghsa": "GitHub Security Advisory", "osv": "OSV", "lve": "Local Vulnerability Entry",
+}
+_VENDOR_URL = {
+    "debian": "https://security-tracker.debian.org/tracker/{cve}",
+    "ubuntu": "https://ubuntu.com/security/{cve}",
+    "redhat": "https://access.redhat.com/security/cve/{cve}",
+    "almalinux": "https://access.redhat.com/security/cve/{cve}",   # AlmaLinux rebuilds RHEL
+    "rocky": "https://access.redhat.com/security/cve/{cve}",        # Rocky rebuilds RHEL
+    "oracle": "https://linux.oracle.com/cve/{cve}.html",
+    "suse": "https://www.suse.com/security/cve/{cve}.html",
+    "nvd": "https://nvd.nist.gov/vuln/detail/{cve}",
+    "cvelistv5": "https://www.cve.org/CVERecord?id={cve}",
+    "ghsa": "https://github.com/advisories?query={cve}",
+    "osv": "https://osv.dev/vulnerability/{cve}",
+}
+
+
+def _verify_url(source: str, cve: str):
+    t = _VENDOR_URL.get(source)
+    return t.format(cve=cve) if t else None
+
+
+def _bounds_phrase(introduced, fixed, last) -> str:
+    intro = introduced if introduced and introduced != "0" else None
+    if fixed:
+        return f"{('from ' + intro + ' ') if intro else ''}up to (but not including) {fixed}"
+    if last:
+        return f"{('from ' + intro + ' ') if intro else ''}up to and including {last}"
+    if intro:
+        return f"{intro} and later"
+    return "all versions"
+
+
+def _explain_row(r: dict) -> str:
+    label = _SOURCE_LABEL.get(r["source"], r["source"])
+    rel = r.get("release")
+    where = r["package"] + (f" in {rel}" if rel else "")
+    status, raw, just, fixed = r["status"], r.get("status_raw"), r.get("justification"), r.get("fixed")
+    if status == "fixed":
+        return f"{label} fixed this in {where}: a host at {fixed} or later is not vulnerable; below it, it is."
+    if status == "not_affected":
+        return f"{label} states {where} is NOT affected" + (f" ({just})" if just else "") + "."
+    if status == "wont_fix":
+        return (f"{label} acknowledges {where} is affected"
+                + (f" (vendor status '{raw}')" if raw else "")
+                + " but will NOT ship a fix"
+                + (f" — {just}" if just else "")
+                + ". We keep it for audit but exclude it from the vulnerable count.")
+    if status == "under_investigation":
+        return f"{label} is still investigating {where} — no verdict yet."
+    return (f"{label} lists {where} as affected ({_bounds_phrase(r.get('introduced'), fixed, r.get('last_affected'))})"
+            + (f", vendor status '{raw}'" if raw else "")
+            + ("; no fixed version published yet" if not fixed else "")
+            + ".")
+
+
+@mcp.tool()
+async def explain_status(cve_id: str, package: str = "", release: str = "") -> dict:
+    """Explain WHY a CVE has its status for a package in limoza-vDB, with the vendor source and a
+    link to verify. Use this for questions like "why is CVE-X not_affected / vulnerable-without-a-fix
+    / wont_fix for package Y on <distro>?".
+
+    For each affected-layer row it returns our derived ``status``, the vendor's raw status
+    (``raw_status``), the ``reason`` we derived it from, the version bounds, a plain-English
+    ``explanation``, and a ``verify`` URL to the vendor's own page. Base your answer ONLY on this
+    data; cite the source and the verify link, and do not add facts from your own knowledge.
+
+    Args:
+        cve_id:  CVE identifier, e.g. "CVE-2011-3374" (case-insensitive).
+        package: source package / CPE product to explain, e.g. "apt" (optional — omit for all).
+        release: distro release codename to filter, e.g. "bullseye" (optional).
+    """
+    cve_id = cve_id.strip().upper()
+    pkg = package.strip() or "%"
+    data = await hasura.query(EXPLAIN_STATUS, {"cve": cve_id, "pkg": pkg})
+    rows = data.get("affected") or []
+    rel = release.strip().lower()
+    if rel:
+        rows = [r for r in rows if (r.get("release") or "").lower() == rel]
+    if not rows:
+        return {"found": False, "cve_id": cve_id, "package": package or None, "release": release or None,
+                "message": "No affected-layer rows for this CVE/package/release in limoza-vDB."}
+    out = [{
+        "source": r["source"], "package": r["package"], "release": r.get("release"),
+        "status": r["status"], "raw_status": r.get("status_raw"), "reason": r.get("justification"),
+        "introduced": r.get("introduced"), "fixed": r.get("fixed"), "last_affected": r.get("last_affected"),
+        "explanation": _explain_row(r), "verify": _verify_url(r["source"], cve_id),
+    } for r in rows]
+    return {"found": True, "cve_id": cve_id, "package": package or None, "release": release or None,
+            "count": len(out), "explanations": out,
+            "note": ("Each entry: our derived status, the vendor's raw status, the reason we derived it, "
+                     "and a vendor link to verify. Cite the source and verify URL in your answer.")}
 
 
 @mcp.tool()

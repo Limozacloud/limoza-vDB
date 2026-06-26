@@ -45,3 +45,18 @@ query CVEDetails($cve_id: String!) {
   }
 }
 """
+
+# Affected-layer provenance for one CVE (+ optional package filter): per-source, per-release
+# status with the raw vendor status (status_raw) and the reason we derived it (justification).
+# Feeds explain_status — "why does CVE X have status Y for package Z, with a source link?".
+EXPLAIN_STATUS = """
+query ExplainStatus($cve: String!, $pkg: String!) {
+  affected(
+    where: {cve_id: {_eq: $cve}, package: {_ilike: $pkg}}
+    order_by: [{source: asc}, {release: asc}, {package: asc}]
+    limit: 500
+  ) {
+    source coord ecosystem package release introduced fixed last_affected status status_raw justification
+  }
+}
+"""
