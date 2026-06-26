@@ -1,13 +1,15 @@
 """Sync Ubuntu security data — sparse shallow clone of canonical/ubuntu-security-notices.
 
-Only the dirs we need: usn/ (advisories) + osv/cve/ (per-CVE). git pull is the
+Only the dirs we need: usn/ (advisories) + osv/cve/ (per-CVE version ranges) + vex/cve/
+(OpenVEX — carries the per-release triage status the OSV export omits: not_affected and
+won't-fix, used by the affected extractor to refine the OSV rows). git pull is the
 incremental; the ingest re-reads everything (delete_scope makes it idempotent).
 """
 import subprocess
 from pathlib import Path
 
 _REPO   = "https://github.com/canonical/ubuntu-security-notices"
-_SPARSE = ["usn", "osv/cve"]
+_SPARSE = ["usn", "osv/cve", "vex/cve"]
 
 
 def run(dirs: dict):
@@ -24,5 +26,6 @@ def run(dirs: dict):
 
     usn = sum(1 for _ in (dest / "usn").glob("*.json")) if (dest / "usn").exists() else 0
     osv = sum(1 for _ in (dest / "osv" / "cve").rglob("*.json")) if (dest / "osv" / "cve").exists() else 0
-    print(f"  ubuntu: {usn:,} USN · {osv:,} OSV files")
-    return usn + osv
+    vex = sum(1 for _ in (dest / "vex" / "cve").rglob("*.json")) if (dest / "vex" / "cve").exists() else 0
+    print(f"  ubuntu: {usn:,} USN · {osv:,} OSV · {vex:,} VEX files")
+    return usn + osv + vex
