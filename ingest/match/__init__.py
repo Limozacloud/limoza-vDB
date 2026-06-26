@@ -96,13 +96,25 @@ def parse_purl(purl):
     return ptype, name, version or None, quals
 
 
+def _rpm_releases(version):
+    """RHEL host build → the set of Red Hat streams to match. The dist tag carries the minor
+    (`…el9_8`), but Red Hat keys affected / won't-fix at the MAJOR stream (`el9`) and fixes at
+    the specific minor (`el9_0`, `el9_5`, …). A host on 9.8 inherits every fix from 9.0–9.8, so
+    match the major plus all minors up to the host's: el9_8 → [el9, el9_0, … el9_8]."""
+    m = _DIST.search(version or "")
+    if not m:
+        return None
+    tag = m.group(1)
+    major, _, minor = tag.partition("_")
+    if minor.isdigit():
+        return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+    return [f"el{tag}"]
+
+
 def _lane(ptype, version, quals, release=None):
-    """→ (ecosystem, release) for the affected lookup."""
+    """→ (ecosystem, release) for the affected lookup. `release` may be a list (rpm streams)."""
     if ptype == "rpm":
-        if not release:
-            m = _DIST.search(version or "")
-            release = f"el{m.group(1)}" if m else None
-        return "rpm", release
+        return "rpm", ([release] if release else _rpm_releases(version))
     if ptype == "deb":
         rel = release or quals.get("distro")
         return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
@@ -195,14 +207,20 @@ def match(conn, purl, version=None, release=None):
     version = version or pv
     if not version:
         raise ValueError("no version (give pkg@version or a second arg)")
+    if ptype == "rpm" and quals.get("epoch") and ":" not in version:
+        version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    sql = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
-           "version_scheme, status FROM affected "
-           "WHERE ecosystem = %s AND lower(package) = lower(%s) "
-           "AND (release = %s OR (%s::text IS NULL AND release IS NULL))")
+    base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
+            "version_scheme, status FROM affected "
+            "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
+    if isinstance(rel, list):                       # rpm → match the major + minor streams
+        sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
+    else:                                           # deb / ecosystem → exact release or NULL
+        sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
+        params = (eco, name, rel, rel)
     findings = {}
     with conn.cursor() as cur:
-        cur.execute(sql, (eco, name, rel, rel))
+        cur.execute(sql, params)
         for cid, src, _r, intro, fixed, last, scheme, status in cur.fetchall():
             if is_vulnerable(scheme, version, intro, fixed, last, status):
                 findings.setdefault(cid, []).append((src, status, fixed))

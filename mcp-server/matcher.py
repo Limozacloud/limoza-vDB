@@ -42,6 +42,9 @@ _Q_REL = ("query M($eco:String!,$pkg:String!,$rel:String!){"
 _Q_NULL = ("query M($eco:String!,$pkg:String!){"
            " affected(where:{ecosystem:{_eq:$eco},package:{_ilike:$pkg},release:{_is_null:true}},limit:5000)"
            "{ cve_id source introduced fixed last_affected version_scheme status } }")
+_Q_REL_IN = ("query M($eco:String!,$pkg:String!,$rels:[String!]){"
+             " affected(where:{ecosystem:{_eq:$eco},package:{_ilike:$pkg},release:{_in:$rels}},limit:5000)"
+             "{ cve_id source introduced fixed last_affected version_scheme status } }")
 _Q_CPE = ('query M($cpe:String!){'
           ' affected(where:{coord:{_eq:"cpe"},cpe23:{_eq:$cpe}},limit:5000)'
           '{ cve_id source introduced fixed last_affected version_scheme status } }')
@@ -94,12 +97,22 @@ def _parse(purl):
     return ptype, name, version or None, quals
 
 
+def _rpm_releases(version):
+    """el9_8 → [el9, el9_0, … el9_8]: Red Hat keys affected/won't-fix at the major stream and
+    fixes at the specific minor; a host on 9.8 inherits every fix from 9.0–9.8."""
+    m = _DIST.search(version or "")
+    if not m:
+        return None
+    tag = m.group(1)
+    major, _, minor = tag.partition("_")
+    if minor.isdigit():
+        return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+    return [f"el{tag}"]
+
+
 def _lane(ptype, version, quals, release):
     if ptype == "rpm":
-        if not release:
-            m = _DIST.search(version or "")
-            release = f"el{m.group(1)}" if m else None
-        return "rpm", release
+        return "rpm", ([release] if release else _rpm_releases(version))
     if ptype == "deb":
         rel = release or quals.get("distro")
         return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
@@ -184,8 +197,12 @@ async def check(hasura, purl, version, release=None):
     version = version or pv
     if not version:
         raise ValueError("version required")
+    if ptype == "rpm" and quals.get("epoch") and ":" not in version:
+        version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    if rel:
+    if isinstance(rel, list):
+        data = await hasura.query(_Q_REL_IN, {"eco": eco, "pkg": name, "rels": rel})
+    elif rel:
         data = await hasura.query(_Q_REL, {"eco": eco, "pkg": name, "rel": rel})
     else:
         data = await hasura.query(_Q_NULL, {"eco": eco, "pkg": name})
