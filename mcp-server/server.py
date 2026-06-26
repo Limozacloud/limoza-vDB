@@ -22,7 +22,7 @@ from config import load_settings
 from hasura import HasuraClient, request_token
 from lve import create_lve as _create_lve
 from matcher import check as match_check
-from queries import EXPLAIN_STATUS, FULL_CVE_SCAN
+from queries import EXPLAIN_PACKAGE, EXPLAIN_STATUS, FULL_CVE_SCAN
 
 log = logging.getLogger("limoza-mcp")
 
@@ -206,41 +206,84 @@ def _explain_row(r: dict) -> str:
 
 
 @mcp.tool()
-async def explain_status(cve_id: str, package: str = "", release: str = "") -> dict:
-    """Explain WHY a CVE has its status for a package in limoza-vDB, with the vendor source and a
-    link to verify. Use this for questions like "why is CVE-X not_affected / vulnerable-without-a-fix
-    / wont_fix for package Y on <distro>?".
+async def explain_status(cve_id: str = "", package: str = "", release: str = "") -> dict:
+    """Explain, WITH the vendor source and a link to verify, WHY a CVE/package has the status it has
+    in limoza-vDB. You MUST call this — and quote its `explanation` + `verify` URL — whenever the
+    user asks "why is X not_affected / vulnerable-without-a-fix / wont_fix?", why a package has
+    (no) open CVEs, or to prove/justify a status. Never answer such questions from memory or by
+    guessing; if you are about to say "this CVE was likely classified as fixed or not applicable",
+    call this tool instead and report what it actually returns.
 
-    For each affected-layer row it returns our derived ``status``, the vendor's raw status
-    (``raw_status``), the ``reason`` we derived it from, the version bounds, a plain-English
-    ``explanation``, and a ``verify`` URL to the vendor's own page. Base your answer ONLY on this
-    data; cite the source and the verify link, and do not add facts from your own knowledge.
+    Two modes:
+      • cve_id given  → per-CVE: one entry per source/release with our derived ``status``, the
+        vendor's ``raw_status``, the ``reason`` we derived it from, version bounds, a plain-English
+        ``explanation`` and a vendor ``verify`` URL. Add ``package`` to narrow to one package.
+      • only package  → package mode: WHY the package has (no) open CVEs for a ``release`` —
+        status totals plus the wont_fix CVEs (with reasons + links) and example fixed versions, so
+        "no open CVEs" can be proven (everything is fixed / wont_fix / not_affected).
+
+    Base your answer ONLY on this data; cite the source and verify link.
 
     Args:
-        cve_id:  CVE identifier, e.g. "CVE-2011-3374" (case-insensitive).
-        package: source package / CPE product to explain, e.g. "apt" (optional — omit for all).
-        release: distro release codename to filter, e.g. "bullseye" (optional).
+        cve_id:  CVE identifier, e.g. "CVE-2011-3374" (optional if package is given).
+        package: source package / CPE product, e.g. "ghostscript" (optional if cve_id is given).
+        release: distro release codename, e.g. "bullseye" (optional; recommended in package mode).
     """
     cve_id = cve_id.strip().upper()
-    pkg = package.strip() or "%"
-    data = await hasura.query(EXPLAIN_STATUS, {"cve": cve_id, "pkg": pkg})
-    rows = data.get("affected") or []
+    pkg = package.strip()
     rel = release.strip().lower()
-    if rel:
-        rows = [r for r in rows if (r.get("release") or "").lower() == rel]
+
+    if cve_id:
+        data = await hasura.query(EXPLAIN_STATUS, {"cve": cve_id, "pkg": pkg or "%"})
+        rows = [r for r in (data.get("affected") or []) if not rel or (r.get("release") or "").lower() == rel]
+        if not rows:
+            return {"found": False, "cve_id": cve_id, "package": package or None, "release": release or None,
+                    "message": "No affected-layer rows for this CVE/package/release in limoza-vDB."}
+        out = [{
+            "source": r["source"], "package": r["package"], "release": r.get("release"),
+            "status": r["status"], "raw_status": r.get("status_raw"), "reason": r.get("justification"),
+            "introduced": r.get("introduced"), "fixed": r.get("fixed"), "last_affected": r.get("last_affected"),
+            "explanation": _explain_row(r), "verify": _verify_url(r["source"], cve_id),
+        } for r in rows]
+        return {"found": True, "mode": "cve", "cve_id": cve_id, "package": package or None,
+                "release": release or None, "count": len(out), "explanations": out,
+                "note": "Quote each explanation + verify URL in your answer; do not guess."}
+
+    if not pkg:
+        return {"found": False, "message": "Provide a cve_id and/or a package."}
+
+    data = await hasura.query(EXPLAIN_PACKAGE, {"pkg": pkg})
+    rows = [r for r in (data.get("affected") or []) if not rel or (r.get("release") or "").lower() == rel]
     if not rows:
-        return {"found": False, "cve_id": cve_id, "package": package or None, "release": release or None,
-                "message": "No affected-layer rows for this CVE/package/release in limoza-vDB."}
-    out = [{
-        "source": r["source"], "package": r["package"], "release": r.get("release"),
-        "status": r["status"], "raw_status": r.get("status_raw"), "reason": r.get("justification"),
-        "introduced": r.get("introduced"), "fixed": r.get("fixed"), "last_affected": r.get("last_affected"),
-        "explanation": _explain_row(r), "verify": _verify_url(r["source"], cve_id),
-    } for r in rows]
-    return {"found": True, "cve_id": cve_id, "package": package or None, "release": release or None,
-            "count": len(out), "explanations": out,
-            "note": ("Each entry: our derived status, the vendor's raw status, the reason we derived it, "
-                     "and a vendor link to verify. Cite the source and verify URL in your answer.")}
+        return {"found": False, "package": package, "release": release or None,
+                "message": "No affected-layer rows for this package/release in limoza-vDB."}
+    totals = Counter(r["status"] for r in rows)
+    wont_fix, open_aff, fixed_ex, seen = [], [], [], set()
+    for r in rows:
+        cid, s = r["cve_id"], r["status"]
+        if s == "wont_fix" and cid not in seen:
+            seen.add(cid)
+            wont_fix.append({"cve": cid, "source": r["source"], "release": r.get("release"),
+                             "reason": r.get("justification"), "explanation": _explain_row({**r, "package": pkg}),
+                             "verify": _verify_url(r["source"], cid)})
+        elif s == "affected":
+            open_aff.append({"cve": cid, "source": r["source"], "release": r.get("release"),
+                             "explanation": _explain_row({**r, "package": pkg}),
+                             "verify": _verify_url(r["source"], cid)})
+        elif s == "fixed" and r.get("fixed") and len(fixed_ex) < 25:
+            fixed_ex.append({"cve": cid, "source": r["source"], "release": r.get("release"), "fixed": r["fixed"]})
+    where = pkg + (f" in {rel}" if rel else "")
+    summary = (f"{where}: {totals.get('fixed', 0)} fixed, {totals.get('wont_fix', 0)} wont_fix "
+               f"(deprioritised — listed), {totals.get('not_affected', 0)} not_affected, "
+               f"{len(open_aff)} still-open affected. "
+               + ("No genuinely open CVEs — they are either fixed at a version, wont_fix, or not affected."
+                  if not open_aff else "Open CVEs need attention (no fix published)."))
+    return {"found": True, "mode": "package", "package": package, "release": release or None,
+            "totals": dict(totals), "summary": summary,
+            "open_affected": open_aff[:50], "wont_fix": wont_fix[:50], "fixed_examples": fixed_ex,
+            "note": ("Prove the verdict from this: open_affected = genuinely vulnerable; wont_fix = "
+                     "deprioritised by the vendor (cite reason + verify); fixed_examples show the fix "
+                     "versions. A host is patched if its version >= the fixed version for that CVE.")}
 
 
 @mcp.tool()

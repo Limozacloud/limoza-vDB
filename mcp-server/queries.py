@@ -61,3 +61,17 @@ query ExplainStatus($cve: String!, $pkg: String!) {
   }
 }
 """
+
+# Package-level provenance (no specific CVE): every CVE tracked for a package, with status +
+# reason — feeds explain_status's package mode ("why does package X have no open CVEs?").
+EXPLAIN_PACKAGE = """
+query ExplainPackage($pkg: String!) {
+  affected(
+    where: {package: {_ilike: $pkg}}
+    order_by: [{release: asc}, {source: asc}, {cve_id: asc}]
+    limit: 3000
+  ) {
+    cve_id source release introduced fixed last_affected status status_raw justification
+  }
+}
+"""
