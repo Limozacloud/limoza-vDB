@@ -36,10 +36,11 @@ query CVEDetails($cve_id: String!) {
     vendors     { source data }
     advisory_cve { advisory { source advisory_id url title severity published modified } }
     exploits { source source_id name url metadata }
-    affected(limit: 200, order_by: [{status: asc}, {source: asc}, {package: asc}]) {
-      coord ecosystem package release introduced fixed last_affected status status_raw source
+    affected(limit: 1000, order_by: [{source: asc}, {status: asc}, {package: asc}]) {
+      ecosystem package release fixed status source
     }
   }
+  affected_aggregate(where: {cve_id: {_eq: $cve_id}}) { aggregate { count } }
   cve_levels(args: {p_cve: $cve_id}, order_by: {lvl: asc}) {
     lvl source url tracked_only
   }
