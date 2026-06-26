@@ -379,6 +379,9 @@ CREATE INDEX IF NOT EXISTS idx_affected_cve  ON affected (cve_id);
 CREATE INDEX IF NOT EXISTS idx_affected_purl ON affected (purl);
 CREATE INDEX IF NOT EXISTS idx_affected_cpe  ON affected (cpe23);
 CREATE INDEX IF NOT EXISTS idx_affected_pkg  ON affected (ecosystem, package);
+-- the matcher looks up case-insensitively (rpm/deb names are mixed-case: NetworkManager, …);
+-- a plain (ecosystem, package) index can't serve lower(package), so add the functional form.
+CREATE INDEX IF NOT EXISTS idx_affected_pkg_lower ON affected (ecosystem, lower(package));
 
 -- ── LVE: local (user-defined) vulnerability entries ───────────────────────────
 -- Custom vuln records — the SOURCE OF TRUTH for things not in any public feed
