@@ -25,7 +25,7 @@ vdb ingest all           # write everything that was synced
 | Group | Members |
 |-------|---------|
 | `reference` | `cna`, `cpe`, `cwe`, `source_urls` |
-| `records` | `cvelistv5` |
+| `records` | `cvelistv5`, `nvd` |
 | `scoring` | `epss`, `kev`, `ssvc` |
 | `advisories` | `redhat`, `suse`, `ubuntu`, `debian`, `oracle`, `almalinux`, `rocky`, `microsoft`, `ghsa`, `osv` |
 | `exploits` | `exploitdb`, `metasploit`, `nuclei`, `poc_github` |

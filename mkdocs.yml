@@ -25,6 +25,7 @@ nav:
     - Overview: datasources/index.md
     - CVE baseline:
       - CVE List (MITRE): datasources/cvelistv5.md
+      - NVD: datasources/nvd.md
     - Linux distributions:
       - Red Hat: datasources/redhat.md
       - SUSE: datasources/suse.md

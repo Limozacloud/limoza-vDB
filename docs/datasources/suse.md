@@ -29,10 +29,10 @@ vulnerabilities[0]/                     (only the first vulnerability object is 
 │       └── baseSeverity                ✅ → cve_cvss.severity (lowercased; computed from score if absent)
 ├── references[].{url, category}        ✅ → cve_ref.{url, type}
 ├── remediations[workaround|mitigation].details  ✅ → cve_workaround.value
-├── product_status / product_tree       ✗  affected/fixed package status is a later phase
+├── product_status / product_tree       ✅ → affected (coord=purl) — full VEX status + fix versions
 └── threats[impact].details             ✅ → cve_vendor.data.impact
 
-Legend: ✅ imported  ✗ not imported (yet)
+Legend: ✅ imported  ✗ not imported
 ```
 
 ## CSAF-Advisories
@@ -73,7 +73,10 @@ vulnerabilities[]/
   `cve_levels()` surfaces as `tracked_only = true`.
 - `cve_cwe` is not present in SUSE VEX files — the field is parsed but typically empty.
 - Only `vulnerabilities[0]` is processed per VEX file (SUSE VEX files carry a single CVE).
-- Affected/fixed package status (purls, version ranges) is a later phase and not written yet.
+- SUSE's CSAF VEX `product_status` (known_affected / known_not_affected / first_fixed /
+  recommended) drives the [affected layer](../affected-versions.md) (`coord=purl`).
+  `no_fix_planned` products are kept out of the status buckets, so SUSE's affected set is
+  already free of won't-fix noise.
 
 ---
 
@@ -92,6 +95,7 @@ cve_alias          ❌
 advisory           ✅  SUSE-SU / openSUSE-SU — id / title / severity / dates / url
 advisory_cve       ✅  advisory ↔ CVE
 cve_vendor         ✅  {"severity": aggregate_severity, "impact": threats[impact]} (VEX)
+affected           ✅  product_status + product_tree → coord=purl (full VEX status)
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

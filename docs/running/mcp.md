@@ -29,9 +29,10 @@ read-only [GraphQL API](graphql.md).
 
 | Tool | Description |
 |------|-------------|
-| `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, solutions/workarounds, impacts, vendor assessments, advisories, exploits, EPSS/KEV/SSVC triage signals, a sample of affected packages, and the L1–L3 advisory tiers. |
+| `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, solutions/workarounds, impacts, vendor assessments, advisories, exploits, EPSS/KEV/SSVC triage signals, a **per-source affected summary** (counts + one example fix per source, not individual packages), and the L1–L3 advisory tiers. Compact, fixed-format output. |
 | `check_vulnerable(purl, version, release)` | Version-compares a scanned component against the [affected-version data](../affected-versions.md): "is X version Y vulnerable?" Accepts a **purl** (rpm/deb/ecosystem — `release` like el9 / jammy / bookworm required for OS packages, omitted for language ecosystems) **or a CPE 2.3 string** (Windows / Microsoft / binary software — build-compared). Returns the matching CVEs with fixed version, status, and source. |
 | `match_bulk(components)` | Like `check_vulnerable` but for a **list** of components in one call — each `{purl\|cpe, version, release?}` → per-component `vulnerable`/`compliant` + CVEs, plus summary counts. (For huge batches with no token cost, prefer the [REST API](rest-api.md).) |
+| `explain_status(cve_id, package, release)` | Explain **why** a CVE/package has its status, with the vendor source and a verify link. Per-CVE mode (with `cve_id`) gives our derived status, the vendor's raw status, the reason (`justification`) and a vendor URL per source; package mode (just `package` + `release`) explains why a package has (no) open CVEs — status totals plus the `wont_fix` CVEs with reasons. For "why is X not_affected / vulnerable-without-a-fix / wont_fix?". |
 | `create_lve(product, title, …)` | Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)) — your own "CVE" (e.g. "Notepad++ < 8.7.4"). Matched immediately afterwards. **Requires a token with the `lve_writer` role** (a read-only token is rejected). |
 
 ## Enable it

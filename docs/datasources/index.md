@@ -15,24 +15,25 @@ every other source follows (see the [documentation conventions](../datasource_bl
 | Source | Format | Writes |
 |--------|--------|--------|
 | [CVE List](cvelistv5.md) | CVE Record Format v5 (git) | `cve_record`, descriptions, cvss, cwes, references, solutions, workarounds, impacts, aliases |
+| [NVD](nvd.md) | NVD CVE 2.0 (JSON mirror) | descriptions, cvss, cwes, references, affected (authoritative CPE lane) |
 
 ### Linux distributions
 
 | Source | Format | Writes |
 |--------|--------|--------|
-| [Red Hat](redhat.md) | CSAF 2.0 (VEX + advisories) | descriptions, cvss, cwes, references, advisories, vendor assessment |
-| [SUSE](suse.md) | CSAF 2.0 (VEX + advisories) | descriptions, cvss, references, advisories, vendor assessment |
-| [Ubuntu](ubuntu.md) | USN + OSV | descriptions, references, advisories, vendor assessment |
-| [Debian](debian.md) | Security Tracker + OSV (DSA/DLA) | advisories, vendor assessment |
-| [AlmaLinux](almalinux.md) | errata JSON | advisories, cvss, vendor assessment |
-| [Rocky Linux](rocky.md) | Apollo API | advisories, cvss, cwes, vendor assessment |
-| [Oracle Linux](oracle.md) | OVAL | advisories, cvss, vendor assessment |
+| [Red Hat](redhat.md) | CSAF 2.0 (VEX + advisories) | descriptions, cvss, cwes, references, advisories, vendor assessment, affected |
+| [SUSE](suse.md) | CSAF 2.0 (VEX + advisories) | descriptions, cvss, references, advisories, vendor assessment, affected |
+| [Ubuntu](ubuntu.md) | USN + OSV + VEX | descriptions, advisories, vendor assessment, affected |
+| [Debian](debian.md) | Security Tracker + OSV (DSA/DLA) | descriptions, advisories, vendor assessment, affected |
+| [AlmaLinux](almalinux.md) | errata JSON | advisories, cvss, vendor assessment, affected (RHEL-inherited) |
+| [Rocky Linux](rocky.md) | Apollo API | advisories, cvss, cwes, vendor assessment, affected (RHEL-inherited) |
+| [Oracle Linux](oracle.md) | OVAL | advisories, cvss, vendor assessment, affected |
 
 ### OS / vendor
 
 | Source | Format | Writes |
 |--------|--------|--------|
-| [Microsoft MSRC](microsoft.md) | CVRF v3.0 | descriptions, cvss, cwes, references, advisories, vendor assessment |
+| [Microsoft MSRC](microsoft.md) | CVRF v3.0 | descriptions, cvss, cwes, references, advisories, vendor assessment, affected (CPE / fix builds) |
 
 ### Package ecosystems
 

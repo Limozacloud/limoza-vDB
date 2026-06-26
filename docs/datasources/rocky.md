@@ -12,7 +12,7 @@ Rocky Linux errata service.
 - **Content:** RLSA-\* (Rocky Linux Security Advisories) with their CVE list, per-CVE
   CVSS3 vectors and base scores, CWE ids, advisory severity, synopsis, published/updated
   timestamps. Only `kind = "Security"` advisories carry CVEs and are relevant here.
-  Per-package fix data is a later phase.
+  Per-package fix status comes from the Red Hat ranges Rocky inherits.
 
 ```
 advisories[] (one object per RLSA)/
@@ -29,7 +29,7 @@ advisories[] (one object per RLSA)/
 
 (other fields)                          ✗  not imported
 
-Legend: ✅ imported  ✗ not imported (yet)
+Legend: ✅ imported  ✗ not imported
 ```
 
 ## Notes
@@ -46,8 +46,9 @@ Legend: ✅ imported  ✗ not imported (yet)
 - Advisory URLs are constructed at import time: `https://errata.rockylinux.org/<RLSA-name>`.
   The `source_urls.json` entry (`cve_url = https://errata.rockylinux.org/cve/{cve}`) drives
   the per-CVE tracking link in `cve_levels()`.
-- Affected/fixed package status (purls, version ranges) is a later phase and not
-  written yet.
+- Rocky Linux inherits Red Hat's [affected ranges](../affected-versions.md)
+  (`status_source = redhat-inherited`), so a Rocky host matches even without its own
+  erratum.
 
 ---
 
@@ -66,6 +67,7 @@ cve_alias          ❌
 advisory           ✅  RLSA — id / title / severity / published / modified / url
 advisory_cve       ✅  RLSA ↔ CVE
 cve_vendor         ✅  {"severity": "<highest RLSA severity for this CVE>"}
+affected           ✅  inherited from Red Hat (status_source=redhat-inherited), coord=purl
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

@@ -47,20 +47,30 @@ Every source's native vocabulary is mapped onto six values that drive the matche
 | `under_investigation` | being assessed → not flagged |
 | `affected` | vulnerable, no fix yet → flagged |
 | `fixed` | fixed in a version → flagged only if installed `<` fixed |
-| `wont_fix` | vulnerable, no fix coming → flagged (labelled) |
+| `wont_fix` | vendor won't fix (Debian no-dsa / `unimportant` / EOL, Ubuntu EOL, …) → **excluded from the vulnerable verdict**, kept in the DB with its `justification` for audit |
 | `unknown` | no statement → grey zone |
+
+The matcher suppresses `not_affected`, `under_investigation`, `unknown` **and** `wont_fix`
+— so a deprioritised finding stays queryable (with the reason in `justification`) but does
+not count as vulnerable. `affected` and `fixed` (when installed `<` fixed) are the only
+statuses that flag.
 
 ## How it's derived
 
 `vdb affected` runs per-source extractors; each owns its slice (delete-by-`origin`,
 reinsert). Sources:
 
-- **Distros (purl):** Red Hat, SUSE, Ubuntu, Debian, Oracle — from their VEX/OVAL/tracker data.
+- **Distros (purl):** Red Hat, SUSE, Ubuntu, Debian, Oracle — from their VEX/OVAL/tracker
+  data. Debian (no-dsa / `urgency`) and Ubuntu (OpenVEX action statements) map their
+  deprioritised CVEs to `wont_fix` with a `justification`; Red Hat carries it natively in
+  its CSAF remediations.
 - **Clones (purl):** AlmaLinux, Rocky, Oracle Linux inherit Red Hat's ranges
   (`status_source = redhat-inherited`) so a clone host matches even when the clone
   filed no advisory of its own.
 - **Ecosystems (purl):** GHSA + OSV-native, from the per-package version ranges.
-- **CVE List (cpe):** CNA-provided CPEs in `containers.cna.affected[].cpes`.
+- **NVD (cpe):** the **authoritative** CPE lane — `configurations[].cpeMatch` version
+  ranges, see [NVD](datasources/nvd.md).
+- **CVE List (cpe):** fallback CPE synthesis for CVEs NVD has no configuration for.
 - **Microsoft (cpe):** MSRC fix builds — see [Microsoft](datasources/microsoft.md).
 
 ## CPE validation
@@ -105,11 +115,14 @@ exposed as the [`vdb match`](running/cli.md#match) CLI and the
 [`check_vulnerable`](running/mcp.md#tools) MCP tool.
 
 - **purl input** → ecosystem + release lookup, version-compared with
-  [`univers`](https://github.com/aboutcode-org/univers) per scheme.
-- **cpe input** → `vendor:product(+update)` lookup, numeric build compare. Findings are
-  aggregated per `(cve, product)`: a host is patched once it reaches **any** fix build of
-  that CVE/product, so parallel fix tracks (Windows security-only vs monthly rollup) never
-  false-positive.
+  [`univers`](https://github.com/aboutcode-org/univers) per scheme. For deb the **source**
+  package (the `upstream` qualifier, falling back to the purl name) and the release
+  codename (`distro=debian-11` → `bullseye`, `ubuntu-22.04` → `jammy`, …) drive the lookup.
+- **cpe input** → `vendor:product(+update)` lookup. The `generic` scheme compares with
+  `univers`' `MavenVersion`, so numeric parts rank numerically (17.9 < 17.10, Windows UBRs)
+  and letter versions work (openssl 1.1.1w < 1.1.1x). Findings are aggregated per
+  `(cve, product)`: a host is patched once it reaches **any** fix build of that CVE/product,
+  so parallel fix tracks (Windows security-only vs monthly rollup) never false-positive.
 
 ```bash
 vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1

@@ -1,9 +1,12 @@
 # Ubuntu / Canonical
 
 Ubuntu security data is fetched as a sparse clone of the
-`canonical/ubuntu-security-notices` GitHub repository. Two sub-feeds are consumed:
-the **OSV** feed (one file per CVE) carries the per-CVE enrichment; the **USN** feed
-(one file per advisory) supplies the bulletin metadata and CVE links.
+`canonical/ubuntu-security-notices` GitHub repository. Three sub-feeds are consumed:
+the **OSV** feed (one file per CVE) carries the per-CVE enrichment and version ranges;
+the **USN** feed (one file per advisory) supplies the bulletin metadata and CVE links;
+the **VEX** feed (OpenVEX, one file per CVE) carries the per-release triage status the
+OSV export omits (not-affected and won't-fix), used to refine the
+[affected-version layer](#affected-versions-l4).
 
 ## OSV (per-CVE enrichment)
 - **URL:** `https://github.com/canonical/ubuntu-security-notices` (sparse clone, `osv/cve/` directory)
@@ -44,9 +47,31 @@ cves[]                                  ✅ → advisory_cve.cve_id  (one row pe
 Legend: ✅ imported  ✗ not imported
 ```
 
+## Affected versions (L4)
+
+The OSV feed supplies the version ranges (`affected`, `coord=purl`, `ecosystem=deb`, keyed
+by the **source** package); the VEX feed refines their **status**. `vdb affected` builds
+each row from OSV (introduced / fixed) then overlays the OpenVEX statement for that
+(CVE, package, release):
+
+| OSV / VEX | → status |
+|-----------|----------|
+| OSV has a `fixed` event | `fixed` (that version) |
+| VEX `not_affected` | `not_affected` (+ justification) |
+| VEX `affected`, action "no longer supported" (EOL) | `wont_fix` |
+| VEX `affected`, action "decided to not fix" | `wont_fix` |
+| OSV affected, no won't-fix VEX | `affected` |
+
+OpenVEX's `status` only carries affected / fixed / not_affected / under_investigation; the
+won't-fix nuance lives in the statement's `action_statement` text, matched on Ubuntu's
+fixed template phrases. `wont_fix` rows stay in the DB (with `justification`) but are
+excluded from the vulnerable verdict — removing the EOL / "won't fix" noise while keeping
+genuinely open CVEs.
+
 ## Notes
 
-- Both feeds live in one sparse git clone; only `usn/` and `osv/cve/` are checked out.
+- All three feeds live in one sparse git clone; only `usn/`, `osv/cve/` and `vex/cve/` are
+  checked out.
 - The OSV pass runs in parallel workers and writes per-CVE enrichment plus `cve_vendor`.
   The USN pass (single-threaded) writes `advisory` + `advisory_cve` rows.
 - Ubuntu gives CVSS vectors without pre-computed base scores. The importer computes the
@@ -58,8 +83,9 @@ Legend: ✅ imported  ✗ not imported
   (`cve_url = https://ubuntu.com/security/{cve}`) drives the `cve_levels()` per-CVE
   tracking link for CVEs that have no formal USN (shown as `tracked_only = true`).
 - No CWE data is present in any Ubuntu feed.
-- Affected/fixed package status (purls, version ranges) is a later phase and not
-  written yet.
+- The `affected` layer is keyed by the **source** package and release codename, so a
+  scanner sends the source (binary→source via the purl `upstream` qualifier) and
+  `distro=ubuntu-22.04` (→ `jammy`).
 
 ---
 
@@ -78,6 +104,7 @@ cve_alias          ❌
 advisory           ✅  USN — id / title / published / url
 advisory_cve       ✅  USN ↔ CVE
 cve_vendor         ✅  {"severity": Ubuntu priority label} (OSV)
+affected           ✅  OSV ranges + OpenVEX status → fixed / affected / wont_fix / not_affected (source-keyed, coord=purl)
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

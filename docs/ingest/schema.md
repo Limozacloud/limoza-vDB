@@ -204,6 +204,7 @@ The version-precise layer derived by the `vdb affected` pass — one row per
 | `version_scheme` | text | comparison scheme (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
 | `status` | text | canonical VEX status (`not_affected` / `under_investigation` / `affected` / `fixed` / `wont_fix` / `unknown`) |
 | `status_raw` | text | the source's original wording |
+| `justification` | text | why the status was derived (e.g. `urgency: unimportant`, `nodsa: ignored`) — surfaced by `explain_status` |
 | `source` / `status_source` / `origin` | text | author / who decided / importer (delete-scope key) |
 
 Tracked in Hasura (related from `cve`); the

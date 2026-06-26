@@ -46,9 +46,8 @@ Each `docs/datasources/<source>.md` should contain:
 2. **Field-mapping tree** — a fenced ASCII tree of the source format, annotating each
    field with the table it lands in. Legend: `✅ imported`, `✗ not imported`, plus
    source-specific markers (e.g. `⊃ covered by another feed`).
-3. **PURL** — the package URL format this source produces, where it emits package
-   data (affected/fixed versions are a later phase, but the purl shape is worth
-   documenting).
+3. **PURL / CPE** — the identity shape this source produces, and how its per-package
+   status feeds the [affected layer](affected-versions.md) (`vdb affected`).
 4. **Notes** — caveats, gaps, cross-source relationships (e.g. how this source feeds
    an [advisory tier](advisory-tiers.md)).
 5. **Schema Coverage** — a checklist of the tables above with `✅ / ❌`, showing

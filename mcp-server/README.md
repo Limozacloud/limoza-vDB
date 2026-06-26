@@ -16,10 +16,13 @@ and reaches the rest of the stack only through the read-only Hasura GraphQL API.
 
 | Tool | Description |
 |------|-------------|
-| `get_cve_detail(cve_id)` | All known data for one CVE (titles, CVSS, packages per distro, mitigations, exploits, EPSS/KEV/SSVC, history). |
+| `get_cve_detail(cve_id)` | All known data for one CVE — descriptions, CVSS, CWEs, references, vendor assessments, advisories, exploits, EPSS/KEV/SSVC, a per-source affected summary, and the L1–L3 advisory tiers. Compact, fixed-format output. |
+| `check_vulnerable(purl, version, release)` | Version-compare a scanned component against the affected-version data ("is X version Y vulnerable?"). Accepts a purl or a CPE 2.3 string. |
+| `match_bulk(components)` | `check_vulnerable` for a whole scan in one call — per-component `vulnerable`/`compliant` + CVEs + summary counts. |
+| `explain_status(cve_id, package, release)` | Explain **why** a CVE/package has its status, with the vendor source + a verify link (per-CVE or per-package mode). |
+| `create_lve(product, title, …)` | Create a custom vulnerability entry (LVE). Requires an `lve_writer` token. |
 
-More tools (mitigations per distro, package status, triage) are designed but not yet
-implemented — this first cut ships a single use case.
+See [docs/running/mcp.md](../docs/running/mcp.md) for the full reference.
 
 ## Transport & auth
 
@@ -31,11 +34,12 @@ implemented — this first cut ships a single use case.
 
 ## Run
 
-It ships as an **optional, commented-out** service in `docker-compose.prod.yml`.
-Uncomment that block, set `MCP_AUTH_TOKEN` in `.env`, then:
+It ships as a service in both `docker-compose.dev.yml` (built locally) and
+`docker-compose.prod.yml` (pre-built image `ghcr.io/limozacloud/limoza-vdb-mcp`). Set
+`MCP_AUTH_TOKEN` in `.env`, then:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d mcp
+docker compose up -d mcp
 ```
 
 Standalone (without Compose):
