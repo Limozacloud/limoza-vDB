@@ -97,22 +97,35 @@ def _parse(purl):
     return ptype, name, version or None, quals
 
 
-def _rpm_releases(version):
-    """el9_8 → [el9, el9_0, … el9_8]: Red Hat keys affected/won't-fix at the major stream and
-    fixes at the specific minor; a host on 9.8 inherits every fix from 9.0–9.8."""
+_EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
+# scanners label RHEL-family distros as <name>-<major>[.<minor>] (redhat-9.3, rhel-9, centos-9,
+# rocky-9, almalinux-9, oraclelinux-9, ol9); normalise those to the el-tag form.
+_RPM_DISTRO = re.compile(
+    r"^(?:rhel|redhat|centos|rocky(?:linux)?|alma(?:linux)?|oracle(?:linux)?|ol)[-_ ]?(\d+)(?:[.](\d+))?$",
+    re.I)
+
+
+def _el_streams(major, minor):
+    """el9_3 → [el9, el9_0, … el9_3]: major stream + every minor up to the host's."""
+    if minor is None:
+        return [f"el{major}"]
+    return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+
+
+def _rpm_streams(version, rel):
+    """Version `.elN_M` dist tag is authoritative; release / `distro=` (el9, redhat-9.3, …) is
+    the fallback when the version carries no tag."""
     m = _DIST.search(version or "")
-    if not m:
-        return None
-    tag = m.group(1)
-    major, _, minor = tag.partition("_")
-    if minor.isdigit():
-        return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
-    return [f"el{tag}"]
+    if m:
+        major, _, minor = m.group(1).partition("_")
+        return _el_streams(major, minor if minor.isdigit() else None)
+    m = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
+    return _el_streams(m.group(1), m.group(2)) if m else None
 
 
 def _lane(ptype, version, quals, release):
     if ptype == "rpm":
-        return "rpm", ([release] if release else _rpm_releases(version))
+        return "rpm", _rpm_streams(version, release or quals.get("distro"))
     if ptype == "deb":
         rel = release or quals.get("distro")
         return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
