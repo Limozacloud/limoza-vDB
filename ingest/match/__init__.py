@@ -46,13 +46,14 @@ _DISTRO_CODENAME = {
 
 
 def _v(scheme, s):
-    cls = SCHEME.get(scheme, GenericVersion)
-    for c in (cls, GenericVersion):
-        try:
-            return c(s)
-        except Exception:
-            continue
-    return None
+    # Parse with the scheme's OWN class only — no GenericVersion cross-fallback. The fallback let a
+    # non-version value (e.g. an OSV "GIT" commit hash stored in `fixed`) parse as GenericVersion,
+    # which then crashed the compare (PypiVersion < GenericVersion → TypeError → whole component
+    # "unknown"). Unparseable in the scheme → None → that bound is skipped, not mixed.
+    try:
+        return SCHEME.get(scheme, GenericVersion)(s)
+    except Exception:
+        return None
 
 
 def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):

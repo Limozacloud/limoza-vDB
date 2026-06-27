@@ -51,12 +51,13 @@ _Q_CPE = ('query M($cpe:String!){'
 
 
 def _v(scheme, s):
-    for c in (SCHEME.get(scheme, GenericVersion), GenericVersion):
-        try:
-            return c(s)
-        except Exception:
-            continue
-    return None
+    # Scheme's OWN class only — no GenericVersion cross-fallback (an OSV "GIT" commit hash in
+    # `fixed` would parse as GenericVersion and crash the compare PypiVersion<GenericVersion →
+    # whole component "unknown"). Unparseable → None → bound skipped, not mixed.
+    try:
+        return SCHEME.get(scheme, GenericVersion)(s)
+    except Exception:
+        return None
 
 
 def _vulnerable(scheme, installed, introduced, fixed, last, status):
