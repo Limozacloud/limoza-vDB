@@ -47,7 +47,7 @@ _Q_REL_IN = ("query M($eco:String!,$pkg:String!,$rels:[String!]){"
              "{ cve_id source introduced fixed last_affected version_scheme status } }")
 _Q_CPE = ('query M($cpe:String!){'
           ' affected(where:{coord:{_eq:"cpe"},cpe23:{_eq:$cpe}},limit:5000)'
-          '{ cve_id source introduced fixed last_affected version_scheme status } }')
+          '{ cve_id source introduced fixed last_affected fix_kb version_scheme status } }')
 
 
 def _v(scheme, s):
@@ -200,6 +200,7 @@ async def _check_cpe(hasura, cpe, version):
         if hits:
             cves.append({"cve_id": cid, "status": hits[0]["status"],
                          "fixed_version": hits[0]["fixed"],
+                         "fix_kb": hits[0].get("fix_kb"),
                          "sources": sorted({h["source"] for h in hits})})
     return {"ecosystem": "cpe", "release": None, "package": key.split(":")[4], "cves": cves}
 

@@ -23,8 +23,9 @@ from ingest.affected import COLS, cpe_norm, row
 from ingest.affected import status as st
 from ingest.core.cveid import normalize
 
-_CVE_I, _CPE_I, _INTRO_I, _FIXED_I = (
-    COLS.index("cve_id"), COLS.index("cpe23"), COLS.index("introduced"), COLS.index("fixed"))
+_CVE_I, _CPE_I, _INTRO_I, _FIXED_I, _KB_I = (
+    COLS.index("cve_id"), COLS.index("cpe23"), COLS.index("introduced"),
+    COLS.index("fixed"), COLS.index("fix_kb"))
 
 ORIGIN = SOURCE = "microsoft"
 
@@ -77,6 +78,10 @@ def _doc_rows(doc: dict):
             if not fb_raw:
                 continue
             sub = r.get("SubType")
+            # the remediation carries the KB article that ships this FixedBuild (Type 2 →
+            # Description.Value = "5043050"); surface it so the matcher can name the fix.
+            kb_raw = str((r.get("Description") or {}).get("Value") or "").strip()
+            kb = f"KB{kb_raw}" if kb_raw.isdigit() else None
             for pid in r.get("ProductID") or []:
                 cpe = pmap.get(pid)
                 if not cpe:
@@ -98,7 +103,7 @@ def _doc_rows(doc: dict):
                 n = 1 if ("odbc_driver" in prod or "ole_db_driver" in prod) else 2
                 intro = ".".join(fb.split(".")[:n])
                 yield row(cve_id=cid, coord="cpe", cpe23=cpe, package=cpe.split(":")[4],
-                          introduced=intro, fixed=fb, version_scheme="generic",
+                          introduced=intro, fixed=fb, fix_kb=kb, version_scheme="generic",
                           status=st.FIXED, status_raw=sub,
                           source=SOURCE, status_source="own", origin=ORIGIN)
 
@@ -147,6 +152,7 @@ def _derive_sql_tracks(rows: list) -> list:
         d = list(r)
         d[_FIXED_I] = s
         d[_INTRO_I] = ".".join(s.split(".")[:2])
+        d[_KB_I] = None          # sibling build ships under its own KB, which we don't know here
         extra.append(tuple(d))
     return extra
 

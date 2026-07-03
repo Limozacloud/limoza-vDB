@@ -153,13 +153,13 @@ def parse_cpe(cpe):
 
 
 def _cpe_verdict(installed, rows):
-    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status).
+    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status, fix_kb).
 
     Group by ``introduced`` (= one affected range). Within a group the host counts as
     patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
     (Windows security-only vs monthly rollup, with different build numbers) don't
     false-positive. Distinct ranges (different ``introduced``) are OR'd as usual.
-    Returns [(src, status, fixed), …] or [] when not vulnerable.
+    Returns [(src, status, fixed, fix_kb), …] or [] when not vulnerable.
     """
     groups = {}
     for r in rows:
@@ -183,15 +183,15 @@ def _cpe_verdict(installed, rows):
         if fixes:
             if all(iv < fv for _, fv in fixes):           # not reached by any fix track
                 rep, _fv = min(fixes, key=lambda x: x[1])
-                hits.append((rep[0], rep[5], rep[2]))
+                hits.append((rep[0], rep[5], rep[2], rep[6]))
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
-                hits.append((lasts[0][0][0], lasts[0][0][5], None))
+                hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6]))
         elif had_bounds:
             continue                                       # had a fixed/last bound but it didn't
             #                                                parse → can't decide → don't flag (no FP)
         else:
-            hits.append((group[0][0], group[0][5], None))  # genuinely no bound → open-ended affected
+            hits.append((group[0][0], group[0][5], None, group[0][6]))  # no bound → open-ended affected
     return hits
 
 
@@ -203,18 +203,18 @@ def match_cpe(conn, cpe, version=None):
         raise ValueError("not a cpe 2.3 string")
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
-    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status "
+    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb "
            "FROM affected WHERE coord = 'cpe' AND cpe23 = %s")
     by_cve = {}
     with conn.cursor() as cur:
         cur.execute(sql, (key,))
-        for cid, src, intro, fixed, last, scheme, status in cur.fetchall():
-            by_cve.setdefault(cid, []).append((src, intro, fixed, last, scheme, status))
+        for cid, src, intro, fixed, last, scheme, status, kb in cur.fetchall():
+            by_cve.setdefault(cid, []).append((src, intro, fixed, last, scheme, status, kb))
     return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
 
 
 def match(conn, purl, version=None, release=None):
-    """Return {cve_id: [(source, status, fixed), …]} for the vulnerable hits."""
+    """Return {cve_id: [(source, status, fixed, fix_kb), …]} for the vulnerable hits."""
     if purl.startswith("cpe:"):
         return match_cpe(conn, purl, version)
     ptype, name, pv, quals = parse_purl(purl)
@@ -237,5 +237,5 @@ def match(conn, purl, version=None, release=None):
         cur.execute(sql, params)
         for cid, src, _r, intro, fixed, last, scheme, status in cur.fetchall():
             if is_vulnerable(scheme, version, intro, fixed, last, status):
-                findings.setdefault(cid, []).append((src, status, fixed))
+                findings.setdefault(cid, []).append((src, status, fixed, None))  # fix_kb: purl lane has none
     return findings

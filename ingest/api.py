@@ -55,9 +55,10 @@ def _fmt(findings: dict) -> list:
     out = []
     for cid, hits in sorted(findings.items()):
         out.append({"id": cid,
-                    "fixed": next((f for _, _, f in hits if f), None),
+                    "fixed": next((f for _, _, f, _ in hits if f), None),
+                    "fix_kb": next((k for _, _, _, k in hits if k), None),
                     "status": hits[0][1],
-                    "sources": sorted({s for s, _, _ in hits})})
+                    "sources": sorted({s for s, _, _, _ in hits})})
     return out
 
 

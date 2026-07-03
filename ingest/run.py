@@ -200,9 +200,10 @@ def _match(args) -> int:
     print(f"{len(findings)} vulnerable CVE(s):")
     for cid in sorted(findings):
         hits = findings[cid]
-        fixed = next((f for _, _, f in hits if f), None)
-        srcs = ",".join(sorted({s for s, _, _ in hits}))
-        print(f"  {cid}  fixed={fixed or '-'}  [{srcs}]")
+        fixed = next((f for _, _, f, _ in hits if f), None)
+        kb = next((k for _, _, _, k in hits if k), None)
+        srcs = ",".join(sorted({s for s, _, _, _ in hits}))
+        print(f"  {cid}  fixed={fixed or '-'}{('  ' + kb) if kb else ''}  [{srcs}]")
     return 0
 
 
