@@ -363,7 +363,7 @@ async def match_bulk(components: list[dict]) -> dict:
 async def create_lve(product: str, title: str, fixed: str = "", introduced: str = "",
                      last_affected: str = "", severity: str = "", description: str = "",
                      version_scheme: str = "", status: str = "affected") -> dict:
-    """Create a custom vulnerability entry (LVE) — your own "CVE" for something not in the
+    r"""Create a custom vulnerability entry (LVE) — your own "CVE" for something not in the
     public feeds (e.g. "Notepad++ < 8.7.4"). Once created it is matched immediately by
     check_vulnerable / match_bulk and survives rebuilds.
 
