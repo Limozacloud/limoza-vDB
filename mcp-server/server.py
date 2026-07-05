@@ -371,8 +371,11 @@ async def create_lve(product: str, title: str, fixed: str = "", introduced: str 
     `vdb create-token --role lve_writer`); a read-only token is rejected by the database.
 
     Args:
-        product: the affected product — a purl (pkg:generic/notepad++, pkg:pypi/<name>, …)
-                 or a CPE 2.3 string.
+        product: the affected product — a CPE 2.3 string (cpe:2.3:...) or an ecosystem/distro purl
+                 (pkg:rpm|deb|apk|pypi|npm|gem|golang|maven|cargo/...). Generic purls (pkg:generic/...)
+                 are REJECTED — they never match a scanned component. For desktop apps without an
+                 ecosystem purl (Notepad++, 7-Zip, …) use the CPE, e.g.
+                 cpe:2.3:a:notepad-plus-plus:notepad\+\+:8.7.3:*:*:*:*:*:*:*.
         title:   short description, e.g. "Notepad++ < 8.7.4 buffer overflow".
         fixed:   the version that fixes it (installed < fixed ⇒ vulnerable); omit for "no fix yet".
         introduced / last_affected: optional range bounds (last_affected = inclusive upper).

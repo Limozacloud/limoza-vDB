@@ -397,7 +397,9 @@ CREATE TABLE IF NOT EXISTS lve (
     description    TEXT,
     severity       TEXT,
     coord          TEXT NOT NULL CHECK (coord IN ('purl','cpe')),
-    ecosystem      TEXT,
+    -- no generic LVEs: a generic purl never matches a scanned component — identify the product
+    -- with a CPE 2.3 string or an ecosystem/distro purl (rpm/deb/apk/pypi/npm/gem/golang/maven/cargo).
+    ecosystem      TEXT CHECK (ecosystem IS DISTINCT FROM 'generic'),
     package        TEXT,
     purl           TEXT,
     cpe23          TEXT,

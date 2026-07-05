@@ -25,6 +25,11 @@ async def create_lve(hasura, product, title, *, fixed=None, introduced=None,
         ident = {"coord": "cpe", "cpe23": key}
     else:
         ptype, name, _, quals = _parse(product)
+        if ptype == "generic":
+            raise ValueError(
+                "generic purls are not allowed for LVEs — a generic purl never matches a scanned "
+                "component. Identify the product with a CPE 2.3 string (cpe:2.3:...) or an "
+                "ecosystem/distro purl (pkg:rpm|deb|apk|pypi|npm|gem|golang|maven|cargo/...).")
         ident = {"coord": "purl", "ecosystem": ptype, "package": name, "purl": product}
         if quals.get("distro"):
             ident["release"] = quals["distro"]
