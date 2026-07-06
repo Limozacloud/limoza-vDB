@@ -319,7 +319,8 @@ def _hasura_init() -> int:
     MANY = {"cve_cvss": "cvss", "cve_cwe": "cwes", "cve_desc": "descriptions",
             "cve_ref": "refs", "cve_solution": "solutions", "cve_workaround": "workarounds",
             "cve_impact": "impacts", "cve_alias": "aliases", "cve_vendor": "vendors",
-            "advisory_cve": "advisory_cve", "exploits": "exploits", "affected": "affected"}
+            "advisory_cve": "advisory_cve", "exploits": "exploits", "affected": "affected",
+            "curation": "curations"}                     # per-CVE overrides (audit: cve.curations)
     OTHER = ["advisory", "adp", "cna", "cpe", "cwe", "sync_log", "cve_level", "lve"]
     ALL = [SPINE] + list(ONE) + list(MANY) + OTHER
 
@@ -354,7 +355,7 @@ def _hasura_init() -> int:
             "using": manual("cwe", {"cwe_id": "cwe_id"})}})
 
     print("Permissions (select)...")
-    for role in ("readonly", "lve_writer"):           # lve_writer = readonly + insert on lve
+    for role in ("readonly", "lve_writer", "curation_writer"):   # writers = readonly + own insert
         for t in ALL:
             attempt(f"{t} [{role}]", {"type": "pg_create_select_permission", "args": {"source": "default",
                     "table": {"schema": "public", "name": t}, "role": role,
@@ -368,6 +369,15 @@ def _hasura_init() -> int:
                                        "introduced", "fixed", "last_affected",
                                        "version_scheme", "status", "created_by"],
                            "check": {}}}})
+
+    print("Permission (curation_writer insert on curation)...")
+    attempt("curation [curation_writer insert]", {"type": "pg_create_insert_permission", "args":
+            {"source": "default", "table": {"schema": "public", "name": "curation"},
+             "role": "curation_writer",
+             "permission": {"columns": ["cve_id", "action", "coord", "ecosystem", "package",
+                                        "cpe23", "release", "source", "status", "fixed",
+                                        "introduced", "last_affected", "reason", "created_by",
+                                        "expires_at"], "check": {}}}})
 
     print("Reloading metadata...")
     call({"type": "reload_metadata", "args": {"reload_remote_schemas": False}})
