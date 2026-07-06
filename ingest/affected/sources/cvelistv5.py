@@ -18,6 +18,16 @@ from ingest.affected import status as st
 
 ORIGIN = SOURCE = "cvelistv5"
 
+# Some CNAs identify the product by NAME only (no `cpes` field) but carry rich per-branch
+# version ranges that NVD collapses to a single mainline fix — e.g. the PSF/CPython records
+# give the real backport fix per branch ("< 3.13.14", "< 3.14.5") where NVD keeps only
+# "fixed 3.15.0". Map those (vendor, product) names to a CPE we can validate against NVD so the
+# per-branch ranges land in the cpe lane. The matcher's reach-any-fix-track logic then lets a
+# patched 3.13.14 host clear the NVD "< 3.15.0" row. Conservative/curated — extend per verified CNA.
+_CNA_CPE = {
+    ("python software foundation", "cpython"): "cpe:2.3:a:python:python:*:*:*:*:*:*:*:*",
+}
+
 _VT = {"semver": "semver", "maven": "maven", "rpm": "rpm",
        "python": "pep440", "pep440": "pep440", "git": "git"}
 _VAGUE = {"*", "-", "unspecified", "n/a", "na", "unknown", "publication", "various", "all", ""}
@@ -46,6 +56,10 @@ def _file_rows(d: dict):
     seen = set()
     for a in cna.get("affected") or []:
         cpes = list(dict.fromkeys(c for c in (_norm_cpe(c) for c in (a.get("cpes") or [])) if c))
+        if not cpes:                                       # no cpes field → try the curated name map
+            mapped = _CNA_CPE.get(((a.get("vendor") or "").strip().lower(),
+                                   (a.get("product") or "").strip().lower()))
+            cpes = [c for c in [_norm_cpe(mapped)] if c] if mapped else []
         if not cpes:
             continue
         default = a.get("defaultStatus")
