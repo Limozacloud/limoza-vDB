@@ -488,8 +488,13 @@ LANGUAGE sql STABLE AS $fn$
   LEFT JOIN source_url su ON su.source = a.source
   WHERE ac.cve_id = p_cve AND a.source <> 'ghsa'
   UNION
-  SELECT p_cve, 'L3 Downstream', v.source, replace(s.cve_url, '{cve}', p_cve), true
-  FROM cve_vendor v JOIN source_url s ON s.source = v.source
-  WHERE v.cve_id = p_cve AND s.cve_url IS NOT NULL
+  -- a per-CVE template (source_url.cve_url) when the source has one; otherwise the ref the
+  -- source stored on its assessment (cve_vendor.data.ref) — e.g. Node.js links the specific
+  -- security-release blog post per CVE, which has no {cve} template form.
+  SELECT p_cve, 'L3 Downstream', v.source,
+         COALESCE(replace(s.cve_url, '{cve}', p_cve), v.data->>'ref'), true
+  FROM cve_vendor v LEFT JOIN source_url s ON s.source = v.source
+  WHERE v.cve_id = p_cve
+    AND (s.cve_url IS NOT NULL OR v.data ? 'ref')
     AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
 $fn$;

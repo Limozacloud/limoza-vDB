@@ -42,6 +42,7 @@ SOURCES = {
     "microsoft":  ("ingest.advisories.microsoft","advisory", "microsoft"),
     "ghsa":       ("ingest.advisories.ghsa",     "advisory", "ghsa"),
     "osv":        ("ingest.advisories.osv",      "advisory", None),
+    "nodejs":     ("ingest.advisories.nodejs",   "cve_vendor", "nodejs"),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
     "metasploit": ("ingest.exploits.metasploit", "exploits", "metasploit"),
     "nuclei":     ("ingest.exploits.nuclei",     "exploits", "nuclei"),
@@ -52,7 +53,7 @@ GROUPS = {
     "reference":  ["cna", "cpe", "cwe", "source_urls"],
     "scoring":    ["epss", "kev", "ssvc"],
     "records":    ["cvelistv5", "nvd"],
-    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft", "ghsa", "osv"],
+    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft", "ghsa", "osv", "nodejs"],
     "exploits":   ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 
