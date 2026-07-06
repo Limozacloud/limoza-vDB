@@ -34,6 +34,18 @@ _OFFICE = ("office", "excel", "word", "outlook", "powerpoint", "onenote", "visio
            "project", "access", "publisher", "skype", "365")
 _BUILD = re.compile(r"^\d+(\.\d+)+$")
 
+# Rolling products: no parallel supported versions and no back-ports — MSRC gives only the
+# FixedBuild ("update to X or later"), so the whole history below the fix is affected and the
+# major.minor scope (which fragments the single line → false negatives) is wrong. Two flavours:
+#   _ROLLING_FULL  — ONE monotonic scheme (Chromium majors 91→148): fully cumulative, introduced="0"
+#                    so any older build matches a later fix.
+#   _ROLLING_MAJOR — the CPE mixes SCHEMES (VS Code editor 1.x + extensions 0.x/2024.x/2025.x;
+#                    legacy EdgeHTML 10.x + Chromium 97+): scope to the major so a host is cumulative
+#                    WITHIN its scheme but can't cross-match another (1.123 must not hit a 2025.x fix).
+# Curated + conservative — extend only after checking a product's real version shape.
+_ROLLING_FULL  = ("edge_chromium",)
+_ROLLING_MAJOR = ("visual_studio_code", "edge")
+
 
 def _norm_build(fb: str, product: str):
     """MSRC FixedBuild → a comparable build, or None when it isn't build-matchable.
@@ -100,8 +112,13 @@ def _doc_rows(doc: dict):
                 # whose release line is the major alone (ODBC 17.x, 18.x; .10 is a patch, not a
                 # release), so major.minor would wrongly drop e.g. a 17.5 host below a 17.10 fix.
                 prod = cpe.split(":")[4]
-                n = 1 if ("odbc_driver" in prod or "ole_db_driver" in prod) else 2
-                intro = ".".join(fb.split(".")[:n])
+                if prod in _ROLLING_FULL:
+                    intro = "0"                       # monotonic single line → fully cumulative
+                elif prod in _ROLLING_MAJOR:
+                    intro = fb.split(".")[0]          # mixed schemes → cumulative WITHIN the major
+                else:
+                    n = 1 if ("odbc_driver" in prod or "ole_db_driver" in prod) else 2
+                    intro = ".".join(fb.split(".")[:n])
                 yield row(cve_id=cid, coord="cpe", cpe23=cpe, package=cpe.split(":")[4],
                           introduced=intro, fixed=fb, fix_kb=kb, version_scheme="generic",
                           status=st.FIXED, status_raw=sub,
