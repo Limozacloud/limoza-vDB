@@ -414,6 +414,42 @@ CREATE TABLE IF NOT EXISTS lve (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── curation: curated corrections/suppressions applied at MATCH time ───────────
+-- Human overrides on top of the synced data — when we KNOW a source is wrong for our
+-- purposes. Never touched by sync (survives every rebuild, like lve), and applied by the
+-- matcher AFTER it fetches the affected rows, so the raw upstream data stays intact for
+-- audit ("NVD says X, we override to Y because <reason>"). Each rule targets a CVE and,
+-- via its non-NULL selector fields, a subset of that CVE's affected rows:
+--   suppress    → the matched rows are dropped (a false positive / not-applicable finding)
+--   set_status  → force a status (e.g. wont_fix / not_affected → the matcher skips it, but it
+--                 stays VISIBLE in GraphQL with the reason — nothing disappears silently)
+--   set_fixed   → correct the fixed / introduced / last_affected bound
+CREATE TABLE IF NOT EXISTS curation (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id         TEXT NOT NULL,
+    action         TEXT NOT NULL CHECK (action IN ('suppress','set_status','set_fixed')),
+    -- selector — a NULL field is a wildcard; a non-NULL field must equal the affected row's
+    coord          TEXT,
+    ecosystem      TEXT,
+    package        TEXT,
+    cpe23          TEXT,
+    release        TEXT,
+    source         TEXT,
+    -- new values (set_status uses `status`; set_fixed uses fixed/introduced/last_affected)
+    status         TEXT CHECK (status IS NULL OR status IN
+                     ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
+    fixed          TEXT,
+    introduced     TEXT,
+    last_affected  TEXT,
+    reason         TEXT NOT NULL,
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ,
+    CHECK (action <> 'set_status' OR status IS NOT NULL),
+    CHECK (action <> 'set_fixed'  OR fixed IS NOT NULL OR introduced IS NOT NULL OR last_affected IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_curation_cve ON curation (cve_id);
+
 -- Keep affected in sync with lve immediately (so a freshly created LVE matches at once);
 -- the `lve` affected-extractor re-seeds the same rows on a full rebuild (truncate-safe).
 -- Runs with the function owner's rights, so a role that may only INSERT into lve still

@@ -20,7 +20,6 @@ from starlette.routing import Route
 
 from config import load_settings
 from hasura import HasuraClient, request_token
-from lve import create_lve as _create_lve
 from matcher import check as match_check
 from queries import EXPLAIN_PACKAGE, EXPLAIN_STATUS, FULL_CVE_SCAN
 
@@ -359,40 +358,6 @@ async def match_bulk(components: list[dict]) -> dict:
     }
 
 
-@mcp.tool()
-async def create_lve(product: str, title: str, fixed: str = "", introduced: str = "",
-                     last_affected: str = "", severity: str = "", description: str = "",
-                     version_scheme: str = "", status: str = "affected") -> dict:
-    r"""Create a custom vulnerability entry (LVE) — your own "CVE" for something not in the
-    public feeds (e.g. "Notepad++ < 8.7.4"). Once created it is matched immediately by
-    check_vulnerable / match_bulk and survives rebuilds.
-
-    Requires a token with the `lve_writer` role (mint one with
-    `vdb create-token --role lve_writer`); a read-only token is rejected by the database.
-
-    Args:
-        product: the affected product — a CPE 2.3 string (cpe:2.3:...) or an ecosystem/distro purl
-                 (pkg:rpm|deb|apk|pypi|npm|gem|golang|maven|cargo/...). Generic purls (pkg:generic/...)
-                 are REJECTED — they never match a scanned component. For desktop apps without an
-                 ecosystem purl (Notepad++, 7-Zip, …) use the CPE, e.g.
-                 cpe:2.3:a:notepad-plus-plus:notepad\+\+:8.7.3:*:*:*:*:*:*:*.
-        title:   short description, e.g. "Notepad++ < 8.7.4 buffer overflow".
-        fixed:   the version that fixes it (installed < fixed ⇒ vulnerable); omit for "no fix yet".
-        introduced / last_affected: optional range bounds (last_affected = inclusive upper).
-        severity / description: optional metadata.
-        version_scheme: comparison scheme (rpm / deb / semver / pep440 / generic — default generic).
-        status: canonical status (default "affected"; "fixed" pairs with a `fixed` version).
-    """
-    try:
-        row = await _create_lve(hasura, product, title, fixed=fixed or None,
-                                introduced=introduced or None, last_affected=last_affected or None,
-                                severity=severity or None, description=description or None,
-                                version_scheme=version_scheme or None, status=status)
-        return {"created": True, **row}
-    except Exception as e:
-        return {"created": False, "error": str(e)}
-
-
 class BearerAuthMiddleware:
     """Pure-ASGI JWT gate — accepts tokens minted by `ingest create-token`."""
 
@@ -415,7 +380,8 @@ class BearerAuthMiddleware:
         except pyjwt.PyJWTError:
             await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
             return
-        request_token.set(token)        # forward to Hasura → client role gates read/write
+        request_token.set(token)        # forward to Hasura for the read role (MCP is read-only: all
+        #                                 tools query, none mutate — writes go through the REST API)
         await self.app(scope, receive, send)
 
 

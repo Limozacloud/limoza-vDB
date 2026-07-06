@@ -16,9 +16,9 @@ import jwt as pyjwt
 
 from config import Settings
 
-# The calling client's bearer token, stashed per-request by the auth middleware. When
-# set it is forwarded to Hasura verbatim, so the client's ROLE governs read vs write
-# (readonly can only read; lve_writer can also insert LVEs) — Hasura enforces it.
+# The calling client's bearer token, stashed per-request by the auth middleware and forwarded
+# to Hasura verbatim so the client's ROLE scopes what it can read. The MCP is read-only — every
+# tool queries, none mutate; all writes (LVE, curation) go through the REST API instead.
 request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_token", default=None)
 

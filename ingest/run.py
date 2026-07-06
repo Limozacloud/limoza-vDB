@@ -237,8 +237,9 @@ def _table_total(conn, table) -> int:
 
 def _create_token(args) -> int:
     """Mint an HS256 JWT for Hasura (stdlib only, no PyJWT).
-    Usage: vdb create-token [--ttl <days>] [--role <role>]   (default: 1 day, readonly).
-    A non-readonly role (e.g. lve_writer) also carries readonly, so it can read + write."""
+    Usage: vdb create-token [--ttl <days>] [--role <role[,role2,…]>]   (default: 1 day, readonly).
+    --role accepts several comma-separated roles (e.g. lve_writer,curation_writer) → one token that
+    holds them all; readonly is always included, and the first given role is the default role."""
     import base64
     import datetime
     import hashlib
@@ -249,9 +250,9 @@ def _create_token(args) -> int:
     ttl = 1
     if "--ttl" in args:
         ttl = int(args[args.index("--ttl") + 1])
-    role = "readonly"
+    roles = ["readonly"]
     if "--role" in args:
-        role = args[args.index("--role") + 1]
+        roles = [r.strip() for r in args[args.index("--role") + 1].split(",") if r.strip()] or roles
     secret = os.environ.get("HASURA_JWT_SECRET")
     if not secret:
         print("Error: HASURA_JWT_SECRET not set in environment")
@@ -264,8 +265,8 @@ def _create_token(args) -> int:
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
         "https://hasura.io/jwt/claims": {
-            "x-hasura-allowed-roles": sorted({role, "readonly"}),
-            "x-hasura-default-role":  role,
+            "x-hasura-allowed-roles": sorted(set(roles) | {"readonly"}),
+            "x-hasura-default-role":  roles[0],
         },
     }
 
@@ -275,7 +276,8 @@ def _create_token(args) -> int:
     signing = _seg({"alg": "HS256", "typ": "JWT"}) + b"." + _seg(payload)
     sig = base64.urlsafe_b64encode(hmac.new(secret.encode(), signing, hashlib.sha256).digest()).rstrip(b"=")
     print((signing + b"." + sig).decode())
-    print(f"\nrole={role} · TTL {ttl}d · expires {exp:%Y-%m-%d}", file=sys.stderr)
+    print(f"\nroles={','.join(sorted(set(roles) | {'readonly'}))} · default={roles[0]} · "
+          f"TTL {ttl}d · expires {exp:%Y-%m-%d}", file=sys.stderr)
     return 0
 
 

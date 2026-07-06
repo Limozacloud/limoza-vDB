@@ -31,6 +31,43 @@ SCHEME = {
 _SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
+# ── curation: human overrides applied at match time (see the `curation` table) ────────────
+# A rule targets a CVE and, via its non-NULL selector fields, a subset of that CVE's affected
+# rows: suppress drops them, set_status forces a status, set_fixed corrects a bound. Loaded once
+# per match() call (or passed in for a bulk run) and applied after the affected rows are fetched.
+_CUR_SEL = ("coord", "ecosystem", "package", "cpe23", "release", "source")
+
+
+def load_curations(conn) -> dict:
+    """Active curation rules → {cve_id: [rule dict, …]} (expired rules excluded)."""
+    cols = ("cve_id", "action", *_CUR_SEL, "status", "fixed", "introduced", "last_affected")
+    out = {}
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {','.join(cols)} FROM curation "
+                    "WHERE expires_at IS NULL OR expires_at > now()")
+        for r in cur.fetchall():
+            d = dict(zip(cols, r))
+            out.setdefault(d["cve_id"], []).append(d)
+    return out
+
+
+def _curate(cid, ctx, curations):
+    """Apply matching curation rules to one affected row's context (dict with the selector +
+    status/fixed/introduced/last_affected). Returns the (possibly mutated) ctx, or None to
+    suppress. Selector: a non-NULL rule field must equal the row's value (case-insensitive)."""
+    for c in curations.get(cid, ()):  # ()=no rules for this cve
+        if any(c[k] is not None and (ctx.get(k) or "").lower() != c[k].lower() for k in _CUR_SEL):
+            continue                                              # selector doesn't match this row
+        if c["action"] == "suppress":
+            return None
+        if c["action"] == "set_status":
+            ctx["status"] = c["status"]
+        elif c["action"] == "set_fixed":
+            for f in ("fixed", "introduced", "last_affected"):
+                if c[f] is not None:
+                    ctx[f] = c[f]
+    return ctx
+
 # scanners emit the purl distro as ID-VERSION_ID (debian-11, ubuntu-22.04); the Debian/Ubuntu
 # trackers — and so our affected rows — are keyed by codename. Map to codename; pass through
 # values that are already a codename.
@@ -195,7 +232,7 @@ def _cpe_verdict(installed, rows):
     return hits
 
 
-def match_cpe(conn, cpe, version=None):
+def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
     version = version or cv
@@ -203,20 +240,31 @@ def match_cpe(conn, cpe, version=None):
         raise ValueError("not a cpe 2.3 string")
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
+    if curations is None:
+        curations = load_curations(conn)
+    pkg = key.split(":")[4]
     sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb "
            "FROM affected WHERE coord = 'cpe' AND cpe23 = %s")
     by_cve = {}
     with conn.cursor() as cur:
         cur.execute(sql, (key,))
         for cid, src, intro, fixed, last, scheme, status, kb in cur.fetchall():
-            by_cve.setdefault(cid, []).append((src, intro, fixed, last, scheme, status, kb))
+            ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
+                                "release": None, "source": src, "status": status,
+                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+            if ctx is None:
+                continue                                          # suppressed by a curation rule
+            by_cve.setdefault(cid, []).append(
+                (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme, ctx["status"], kb))
     return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
 
 
-def match(conn, purl, version=None, release=None):
+def match(conn, purl, version=None, release=None, curations=None):
     """Return {cve_id: [(source, status, fixed, fix_kb), …]} for the vulnerable hits."""
+    if curations is None:
+        curations = load_curations(conn)
     if purl.startswith("cpe:"):
-        return match_cpe(conn, purl, version)
+        return match_cpe(conn, purl, version, curations)
     ptype, name, pv, quals = parse_purl(purl)
     version = version or pv
     if not version:
@@ -235,7 +283,12 @@ def match(conn, purl, version=None, release=None):
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        for cid, src, _r, intro, fixed, last, scheme, status in cur.fetchall():
-            if is_vulnerable(scheme, version, intro, fixed, last, status):
-                findings.setdefault(cid, []).append((src, status, fixed, None))  # fix_kb: purl lane has none
+        for cid, src, rel_row, intro, fixed, last, scheme, status in cur.fetchall():
+            ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
+                                "release": rel_row, "source": src, "status": status,
+                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+            if ctx is None:
+                continue                                          # suppressed by a curation rule
+            if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
+                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None))
     return findings
