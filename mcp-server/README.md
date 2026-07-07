@@ -20,7 +20,9 @@ and reaches the rest of the stack only through the read-only Hasura GraphQL API.
 | `check_vulnerable(purl, version, release)` | Version-compare a scanned component against the affected-version data ("is X version Y vulnerable?"). Accepts a purl or a CPE 2.3 string. |
 | `match_bulk(components)` | `check_vulnerable` for a whole scan in one call — per-component `vulnerable`/`compliant` + CVEs + summary counts. |
 | `explain_status(cve_id, package, release)` | Explain **why** a CVE/package has its status, with the vendor source + a verify link (per-CVE or per-package mode). |
-| `create_lve(product, title, …)` | Create a custom vulnerability entry (LVE). Requires an `lve_writer` token. |
+
+The server is **read-only** — every tool queries, none mutates. Writes (LVEs, curations) go
+through the REST API (or the equivalent GraphQL mutations).
 
 See [docs/running/mcp.md](../docs/running/mcp.md) for the full reference.
 

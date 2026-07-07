@@ -32,6 +32,7 @@ OSV-style ranges in either coordinate:
 | `ecosystem` / `package` / `release` | purl-lane identity (rpm/deb/pypi/…, name, distro release) |
 | `cpe23` | cpe-lane identity — canonical 13-field `vendor:product` (see [CPE validation](#cpe-validation)) |
 | `introduced` / `fixed` / `last_affected` | the version range (fixed = exclusive upper, last_affected = inclusive) |
+| `fix_kb` | remediation reference for the fix — a Microsoft MSRC KB (e.g. `KB5043050`); NULL for other sources |
 | `version_scheme` | how to compare (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
 | `status` | canonical VEX status (below) |
 | `status_raw` | the source's original wording, kept for audit |
@@ -70,8 +71,17 @@ reinsert). Sources:
 - **Ecosystems (purl):** GHSA + OSV-native, from the per-package version ranges.
 - **NVD (cpe):** the **authoritative** CPE lane — `configurations[].cpeMatch` version
   ranges, see [NVD](datasources/nvd.md).
-- **CVE List (cpe):** fallback CPE synthesis for CVEs NVD has no configuration for.
-- **Microsoft (cpe):** MSRC fix builds — see [Microsoft](datasources/microsoft.md).
+- **CVE List (cpe):** CPE synthesis for CVEs NVD has no configuration for, **and** name-only
+  CNA affected entries (no `cpes` field) resolved through a curated `(vendor,product)→CPE`
+  map — this lands the real per-branch backport fixes that NVD collapses into a single
+  mainline fix (e.g. PSF/CPython: `< 3.13.14` per line, not just `fixed 3.15.0`). See
+  [CVE List](datasources/cvelistv5.md).
+- **Microsoft (cpe):** MSRC fix builds, each carrying its KB in `fix_kb` — see
+  [Microsoft](datasources/microsoft.md).
+- **Node.js (cpe):** per-release-line ranges for the Node.js runtime
+  (`cpe:2.3:a:nodejs:node.js`) from `nodejs/security-wg`, which NVD only enumerates as sample
+  versions and GHSA/OSV don't carry (node core is not an npm package). See
+  [Node.js](datasources/nodejs.md).
 
 ## CPE validation
 
@@ -104,9 +114,30 @@ are **matched exactly like a CVE**:
   from `/data`.
 - The matcher needs no special case — LVEs are ordinary `affected` rows.
 
-Create one via the REST [`POST /lve`](running/rest-api.md) or the MCP
-[`create_lve`](running/mcp.md#tools) tool — both require an `lve_writer`
-[token](running/cli.md#create-token). Ids are `LVE-YYYY-NNNN`.
+Create one via the REST [`POST /lve`](running/rest-api.md) or the `insert_lve_one`
+[GraphQL](running/graphql.md) mutation — both require an `lve_writer`
+[token](running/cli.md#create-token). Ids are `LVE-YYYY-NNNN`. Identify the product with a
+CPE or an ecosystem/distro purl; a generic purl (`pkg:generic/…`) is rejected, since it never
+matches a scanned component.
+
+## Curation (match-time overrides)
+
+When a source is wrong for our purposes, a **curation** rule corrects it without touching the
+raw data. Rules live in the `curation` table (never touched by sync, survives rebuilds like
+`lve`) and are applied by the matcher *after* it fetches the affected rows — so the upstream
+data stays intact for audit ("NVD says X, we override to Y because *reason*"). A rule targets
+a `cve_id` and, via its non-NULL selector (`coord`/`ecosystem`/`package`/`cpe23`/`release`/`source`),
+a subset of that CVE's rows:
+
+- **`suppress`** — drop the matched rows (a false positive / not-applicable finding).
+- **`set_status`** — force a status (`wont_fix`/`not_affected` → the matcher skips it, but it
+  stays visible in GraphQL with the reason).
+- **`set_fixed`** — correct the `fixed`/`introduced`/`last_affected` bound.
+
+`reason` is required; `expires_at` gives optional auto-expiry. Create one via the REST
+[`POST /curation`](running/rest-api.md) or the `insert_curation_one`
+[GraphQL](running/graphql.md) mutation — both require a `curation_writer`
+[token](running/cli.md#create-token).
 
 ## The matcher
 
@@ -123,6 +154,11 @@ exposed as the [`vdb match`](running/cli.md#match) CLI and the
   and letter versions work (openssl 1.1.1w < 1.1.1x). Findings are aggregated per
   `(cve, product)`: a host is patched once it reaches **any** fix build of that CVE/product,
   so parallel fix tracks (Windows security-only vs monthly rollup) never false-positive.
+- **curation** → after the affected rows are fetched, any matching
+  [curation](#curation-match-time-overrides) rule is applied per row (suppress / set_status /
+  set_fixed) before the verdict, so overrides always take effect without altering the raw data.
+
+Each finding carries the `fixed` version and, for Microsoft CPE hits, the `fix_kb` (MSRC KB).
 
 ```bash
 vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1

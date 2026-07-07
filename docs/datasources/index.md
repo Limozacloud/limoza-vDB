@@ -34,6 +34,7 @@ every other source follows (see the [documentation conventions](../datasource_bl
 | Source | Format | Writes |
 |--------|--------|--------|
 | [Microsoft MSRC](microsoft.md) | CVRF v3.0 | descriptions, cvss, cwes, references, advisories, vendor assessment, affected (CPE / fix builds) |
+| [Node.js](nodejs.md) | security-wg `vuln/core` (JSON) | descriptions, vendor assessment, affected (CPE / per-release-line fix ranges) |
 
 ### Package ecosystems
 

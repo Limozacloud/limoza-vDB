@@ -50,8 +50,27 @@ containers.cna / containers.adp[]
 ├── references[]                        ✅ → cve_ref
 ├── solutions[] / workarounds[]         ✅ → cve_solution / cve_workaround
 ├── impacts[].capecId                   ✅ → cve_impact
+├── affected[].cpes + versions[]        ✅ → affected (coord=cpe) — CNA version ranges
 └── providerMetadata.orgId              ✅ → cna.uuids / adp.uuid (provenance join)
 ```
+
+---
+
+## Affected versions (L4)
+
+The `cvelistv5` [affected extractor](../affected-versions.md) synthesises the **CPE lane**
+(`coord=cpe`) from a CNA's `affected[]` entries — `versions[]` (`lessThan` → `fixed`,
+`lessThanOrEqual` → `last_affected`, bare → exact) against the entry's CPE, validated via
+`cpe_norm`. This is the fallback for CVEs NVD has no configuration for.
+
+It also resolves **name-only** CNA entries — those that identify the product by
+`vendor`/`product` with no `cpes` field — through a small curated `(vendor, product) → CPE`
+map (currently `("python software foundation", "cpython") → cpe:2.3:a:python:python`). This
+matters where a CNA carries richer **per-branch** ranges than NVD keeps: the PSF/CPython
+records give the real backport fix per release line (`< 3.13.14`, `< 3.14.5`) where NVD
+collapses everything to a single mainline `fixed 3.15.0`. The matcher's reach-any-fix logic
+then lets a patched 3.13.14 host clear NVD's row. Microsoft vendor CPEs are excluded here
+(MSRC is authoritative).
 
 ---
 
@@ -68,6 +87,7 @@ cve_solution       ✅  where the record provides one
 cve_workaround     ✅  where the record provides one
 cve_impact         ✅  CAPEC, where provided
 cve_alias          ✅  where the record provides one
+affected           ✅  CPE lane (coord=cpe) — CNA version ranges + name-only CNA via curated map
 adp                ✅  ADP publishers seen (byproduct)
 advisory / cve_vendor   ❌  distros/vendors
 exploits / epss / kev / ssvc   ❌  their own sources

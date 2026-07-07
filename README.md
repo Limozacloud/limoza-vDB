@@ -35,7 +35,7 @@ dictionary so a stored row and a scanned component land on the same key.
 - **PostgreSQL** — the store (`schema.sql`, declarative via pgschema).
 - **Hasura** — read-only GraphQL over the schema.
 - **`vdb` ingest CLI** (`ingest/`) — sync, ingest, affected derivation, matching.
-- **REST API** (`ingest/api.py`) — `POST /match` (bulk scan) + `POST /lve`.
+- **REST API** (`ingest/api.py`) — `POST /match` (bulk scan) + `POST /lve` + `POST/GET /curation`.
 - **MCP server** (`mcp-server/`) — vulnerability data as MCP tools for any LLM client.
 
 ## Quickstart
@@ -67,8 +67,8 @@ vdb create-token --ttl 90
   [docs/graphql-example-queries.md](docs/graphql-example-queries.md).
 - **REST `/match`:** bulk-scan a host's components (purl/cpe + version) → per-component
   `vulnerable`/`compliant` + CVEs.
-- **MCP tools:** `get_cve_detail`, `check_vulnerable`, `match_bulk`, `explain_status`,
-  `create_lve` — see [docs/running/mcp.md](docs/running/mcp.md).
+- **MCP tools** (read-only): `get_cve_detail`, `check_vulnerable`, `match_bulk`,
+  `explain_status` — see [docs/running/mcp.md](docs/running/mcp.md).
 
 ## Documentation
 
