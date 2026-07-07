@@ -18,9 +18,9 @@ target they act on everything.
 | Group | Members |
 |-------|---------|
 | `reference` | `cna`, `cpe`, `cwe`, `source_urls` |
-| `records` | `cvelistv5` |
+| `records` | `cvelistv5`, `nvd` |
 | `scoring` | `epss`, `kev`, `ssvc` |
-| `advisories` | `redhat`, `suse`, `ubuntu`, `debian`, `oracle`, `almalinux`, `rocky`, `microsoft`, `ghsa`, `osv` |
+| `advisories` | `redhat`, `suse`, `ubuntu`, `debian`, `oracle`, `almalinux`, `rocky`, `microsoft`, `ghsa`, `osv`, `nodejs` |
 | `exploits` | `exploitdb`, `metasploit`, `nuclei`, `poc_github` |
 
 ## Command overview
@@ -34,8 +34,8 @@ target they act on everything.
 | [`daily`](#daily) | Full pipeline (schema → sync → ingest → affected → hasura-init) — the scheduler's job |
 | [`api`](#api) | Serve the [REST API](rest-api.md) (bulk `/match` + `/lve`) |
 | [`schema`](#schema) | Apply the database schema |
-| [`hasura-init`](#hasura-init) | Track tables + relationships + read-only permissions |
-| [`create-token`](#create-token) | Mint a GraphQL/API JWT (read-only, or a write role) |
+| [`hasura-init`](#hasura-init) | Track tables + relationships + role permissions |
+| [`create-token`](#create-token) | Mint a GraphQL/API JWT (read-only, or write roles) |
 
 ## sync
 
@@ -149,14 +149,16 @@ Mints a JWT for the GraphQL/REST API (default TTL 1 day, role `readonly`).
 Requires `HASURA_JWT_SECRET` in `.env`.
 
 ```bash
-docker compose exec ingest vdb create-token                       # 1-day read-only token
-docker compose exec ingest vdb create-token --ttl 90             # 90-day token
-docker compose exec ingest vdb create-token --role lve_writer    # write token (read + create LVEs)
+docker compose exec ingest vdb create-token                                    # 1-day read-only token
+docker compose exec ingest vdb create-token --ttl 90                           # 90-day token
+docker compose exec ingest vdb create-token --role lve_writer                  # read + create LVEs
+docker compose exec ingest vdb create-token --role lve_writer,curation_writer  # both write roles
 ```
 
-`--role lve_writer` adds the write role (it also carries `readonly`, so it can read and
-write); a default token is read-only. Hasura / the REST `/lve` endpoint enforce the role.
-See [GraphQL & Hasura → tokens](graphql.md#read-only-tokens).
+`--role` accepts one or several comma-separated roles → one token holding them all; `readonly`
+is always included and the first role is the default. The write roles are `lve_writer` (create
+LVEs) and `curation_writer` (create curations). Hasura and the REST `/lve` / `/curation`
+endpoints enforce the role. See [GraphQL & Hasura → tokens](graphql.md#read-only-tokens).
 
 ## Running ad-hoc Python
 

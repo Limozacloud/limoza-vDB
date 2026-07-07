@@ -11,7 +11,7 @@ per major release.
 - **Sync:** full re-download of each major's file on every sync run. Major releases synced: 8, 9, 10.
 - **Content:** ALSA-\* (AlmaLinux Security Advisories) with their CVE references, advisory
   severity, title, issued/updated dates. Only errata with CVE references are imported.
-  Per-package fix data is a later phase.
+  Per-package fix status comes from the Red Hat ranges AlmaLinux inherits.
 
 ```
 errata[] (one object per ALSA)/
@@ -25,7 +25,7 @@ errata[] (one object per ALSA)/
 
 (other fields)                          ✗  not imported
 
-Legend: ✅ imported  ✗ not imported (yet)
+Legend: ✅ imported  ✗ not imported
 ```
 
 ## Notes
@@ -39,8 +39,9 @@ Legend: ✅ imported  ✗ not imported (yet)
 - `cve_vendor.data.severity` is set to the highest ALSA severity seen for each CVE
   across all advisories (Critical > Important > Moderate > Low). This feeds the
   [downstream tier](../advisory-tiers.md) `cve_levels()` assessment.
-- Affected/fixed package status (purls, version ranges) is a later phase and not
-  written yet.
+- AlmaLinux inherits Red Hat's [affected ranges](../affected-versions.md)
+  (`status_source = redhat-inherited`), so an Alma host matches even without its own
+  erratum.
 
 ---
 
@@ -59,6 +60,7 @@ cve_alias          ❌
 advisory           ✅  ALSA — id / title / severity / published / modified / url
 advisory_cve       ✅  ALSA ↔ CVE
 cve_vendor         ✅  {"severity": "<highest ALSA severity for this CVE>"}
+affected           ✅  inherited from Red Hat (status_source=redhat-inherited), coord=purl
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

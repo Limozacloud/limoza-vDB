@@ -37,8 +37,9 @@ Vulnerability[]/
 ├── Threats[Type==1].Description      ✅ → cve_vendor.data.{exploited, publicly_disclosed, exploitability}
 ├── Threats[Type==0].Description      ✅ → cve_vendor.data.impact  (STRIDE-like type string; first wins)
 ├── Remediations[*].FixedBuild        ✅ → affected (coord=cpe) — fix build per product (all SubTypes)
-│   └── ProductID[] → ProductTree CPE ✅ → affected.cpe23 (NVD-validated via cpe_norm)
-├── Remediations[Type==3].URL         ✗  not consumed
+│   ├── ProductID[] → ProductTree CPE ✅ → affected.cpe23 (NVD-validated via cpe_norm)
+│   └── Description (Type 2, KB number) ✅ → affected.fix_kb  (e.g. KB5043050)
+├── Remediations[Type==3].URL         ✗  not consumed (per-product KB advisory objects)
 ├── Remediations[*] without FixedBuild ✗ (Workaround / Mitigation / WillNotFix — no version)
 └── Notes[Type!=2]                    ✗
 
@@ -60,7 +61,13 @@ Microsoft patches by **build number**, not package version. The `microsoft` extr
   resolved via `cpe_norm.from_name()` and validated the same way (covers Windows OS +
   Office 2016+/SQL/Visual Studio).
 - **Fix build.** `FixedBuild` → `affected.fixed` (`version_scheme = generic`), so the
-  matcher version-compares a host build against it.
+  matcher version-compares a host build against it. The KB article shipping that build
+  (Remediation Type 2) is captured in `affected.fix_kb` (e.g. `KB5043050`) and surfaced by
+  the matcher — a `/match` finding names the exact patch.
+- **Rolling products.** Single rolling products with no parallel versions or back-ports
+  (Visual Studio Code, Edge) are matched cumulatively — any build below the fix is affected —
+  rather than scoped to a `major.minor` line (which suits parallel products like SQL Server,
+  Office and Visual Studio).
 - **Dropped:** CBL / Azure Linux (Microsoft's own Linux distro — not a CPE product), and
   any product whose CPE can't be validated against NVD.
 

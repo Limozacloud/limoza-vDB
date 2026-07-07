@@ -42,18 +42,22 @@ _Q_REL = ("query M($eco:String!,$pkg:String!,$rel:String!){"
 _Q_NULL = ("query M($eco:String!,$pkg:String!){"
            " affected(where:{ecosystem:{_eq:$eco},package:{_ilike:$pkg},release:{_is_null:true}},limit:5000)"
            "{ cve_id source introduced fixed last_affected version_scheme status } }")
+_Q_REL_IN = ("query M($eco:String!,$pkg:String!,$rels:[String!]){"
+             " affected(where:{ecosystem:{_eq:$eco},package:{_ilike:$pkg},release:{_in:$rels}},limit:5000)"
+             "{ cve_id source introduced fixed last_affected version_scheme status } }")
 _Q_CPE = ('query M($cpe:String!){'
           ' affected(where:{coord:{_eq:"cpe"},cpe23:{_eq:$cpe}},limit:5000)'
-          '{ cve_id source introduced fixed last_affected version_scheme status } }')
+          '{ cve_id source introduced fixed last_affected fix_kb version_scheme status } }')
 
 
 def _v(scheme, s):
-    for c in (SCHEME.get(scheme, GenericVersion), GenericVersion):
-        try:
-            return c(s)
-        except Exception:
-            continue
-    return None
+    # Scheme's OWN class only — no GenericVersion cross-fallback (an OSV "GIT" commit hash in
+    # `fixed` would parse as GenericVersion and crash the compare PypiVersion<GenericVersion →
+    # whole component "unknown"). Unparseable → None → bound skipped, not mixed.
+    try:
+        return SCHEME.get(scheme, GenericVersion)(s)
+    except Exception:
+        return None
 
 
 def _vulnerable(scheme, installed, introduced, fixed, last, status):
@@ -94,12 +98,35 @@ def _parse(purl):
     return ptype, name, version or None, quals
 
 
+_EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
+# scanners label RHEL-family distros as <name>-<major>[.<minor>] (redhat-9.3, rhel-9, centos-9,
+# rocky-9, almalinux-9, oraclelinux-9, ol9); normalise those to the el-tag form.
+_RPM_DISTRO = re.compile(
+    r"^(?:rhel|redhat|centos|rocky(?:linux)?|alma(?:linux)?|oracle(?:linux)?|ol)[-_ ]?(\d+)(?:[.](\d+))?$",
+    re.I)
+
+
+def _el_streams(major, minor):
+    """el9_3 → [el9, el9_0, … el9_3]: major stream + every minor up to the host's."""
+    if minor is None:
+        return [f"el{major}"]
+    return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+
+
+def _rpm_streams(version, rel):
+    """Version `.elN_M` dist tag is authoritative; release / `distro=` (el9, redhat-9.3, …) is
+    the fallback when the version carries no tag."""
+    m = _DIST.search(version or "")
+    if m:
+        major, _, minor = m.group(1).partition("_")
+        return _el_streams(major, minor if minor.isdigit() else None)
+    m = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
+    return _el_streams(m.group(1), m.group(2)) if m else None
+
+
 def _lane(ptype, version, quals, release):
     if ptype == "rpm":
-        if not release:
-            m = _DIST.search(version or "")
-            release = f"el{m.group(1)}" if m else None
-        return "rpm", release
+        return "rpm", _rpm_streams(version, release or quals.get("distro"))
     if ptype == "deb":
         rel = release or quals.get("distro")
         return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
@@ -173,6 +200,7 @@ async def _check_cpe(hasura, cpe, version):
         if hits:
             cves.append({"cve_id": cid, "status": hits[0]["status"],
                          "fixed_version": hits[0]["fixed"],
+                         "fix_kb": hits[0].get("fix_kb"),
                          "sources": sorted({h["source"] for h in hits})})
     return {"ecosystem": "cpe", "release": None, "package": key.split(":")[4], "cves": cves}
 
@@ -184,8 +212,12 @@ async def check(hasura, purl, version, release=None):
     version = version or pv
     if not version:
         raise ValueError("version required")
+    if ptype == "rpm" and quals.get("epoch") and ":" not in version:
+        version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    if rel:
+    if isinstance(rel, list):
+        data = await hasura.query(_Q_REL_IN, {"eco": eco, "pkg": name, "rels": rel})
+    elif rel:
         data = await hasura.query(_Q_REL, {"eco": eco, "pkg": name, "rel": rel})
     else:
         data = await hasura.query(_Q_NULL, {"eco": eco, "pkg": name})

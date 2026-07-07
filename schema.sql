@@ -365,6 +365,7 @@ CREATE TABLE IF NOT EXISTS affected (
     introduced     TEXT,
     fixed          TEXT,
     last_affected  TEXT,
+    fix_kb         TEXT,      -- remediation reference for the fix (Microsoft MSRC KB, e.g. 'KB5043050'); NULL for distro/ecosystem sources
     version_scheme TEXT,
     status         TEXT NOT NULL CHECK (status IN
                      ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
@@ -379,6 +380,9 @@ CREATE INDEX IF NOT EXISTS idx_affected_cve  ON affected (cve_id);
 CREATE INDEX IF NOT EXISTS idx_affected_purl ON affected (purl);
 CREATE INDEX IF NOT EXISTS idx_affected_cpe  ON affected (cpe23);
 CREATE INDEX IF NOT EXISTS idx_affected_pkg  ON affected (ecosystem, package);
+-- the matcher looks up case-insensitively (rpm/deb names are mixed-case: NetworkManager, …);
+-- a plain (ecosystem, package) index can't serve lower(package), so add the functional form.
+CREATE INDEX IF NOT EXISTS idx_affected_pkg_lower ON affected (ecosystem, lower(package));
 
 -- ── LVE: local (user-defined) vulnerability entries ───────────────────────────
 -- Custom vuln records — the SOURCE OF TRUTH for things not in any public feed
@@ -393,7 +397,9 @@ CREATE TABLE IF NOT EXISTS lve (
     description    TEXT,
     severity       TEXT,
     coord          TEXT NOT NULL CHECK (coord IN ('purl','cpe')),
-    ecosystem      TEXT,
+    -- no generic LVEs: a generic purl never matches a scanned component — identify the product
+    -- with a CPE 2.3 string or an ecosystem/distro purl (rpm/deb/apk/pypi/npm/gem/golang/maven/cargo).
+    ecosystem      TEXT CHECK (ecosystem IS DISTINCT FROM 'generic'),
     package        TEXT,
     purl           TEXT,
     cpe23          TEXT,
@@ -407,6 +413,42 @@ CREATE TABLE IF NOT EXISTS lve (
     created_by     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── curation: curated corrections/suppressions applied at MATCH time ───────────
+-- Human overrides on top of the synced data — when we KNOW a source is wrong for our
+-- purposes. Never touched by sync (survives every rebuild, like lve), and applied by the
+-- matcher AFTER it fetches the affected rows, so the raw upstream data stays intact for
+-- audit ("NVD says X, we override to Y because <reason>"). Each rule targets a CVE and,
+-- via its non-NULL selector fields, a subset of that CVE's affected rows:
+--   suppress    → the matched rows are dropped (a false positive / not-applicable finding)
+--   set_status  → force a status (e.g. wont_fix / not_affected → the matcher skips it, but it
+--                 stays VISIBLE in GraphQL with the reason — nothing disappears silently)
+--   set_fixed   → correct the fixed / introduced / last_affected bound
+CREATE TABLE IF NOT EXISTS curation (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cve_id         TEXT NOT NULL,
+    action         TEXT NOT NULL CHECK (action IN ('suppress','set_status','set_fixed')),
+    -- selector — a NULL field is a wildcard; a non-NULL field must equal the affected row's
+    coord          TEXT,
+    ecosystem      TEXT,
+    package        TEXT,
+    cpe23          TEXT,
+    release        TEXT,
+    source         TEXT,
+    -- new values (set_status uses `status`; set_fixed uses fixed/introduced/last_affected)
+    status         TEXT CHECK (status IS NULL OR status IN
+                     ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
+    fixed          TEXT,
+    introduced     TEXT,
+    last_affected  TEXT,
+    reason         TEXT NOT NULL,
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ,
+    CHECK (action <> 'set_status' OR status IS NOT NULL),
+    CHECK (action <> 'set_fixed'  OR fixed IS NOT NULL OR introduced IS NOT NULL OR last_affected IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_curation_cve ON curation (cve_id);
 
 -- Keep affected in sync with lve immediately (so a freshly created LVE matches at once);
 -- the `lve` affected-extractor re-seeds the same rows on a full rebuild (truncate-safe).
@@ -482,8 +524,13 @@ LANGUAGE sql STABLE AS $fn$
   LEFT JOIN source_url su ON su.source = a.source
   WHERE ac.cve_id = p_cve AND a.source <> 'ghsa'
   UNION
-  SELECT p_cve, 'L3 Downstream', v.source, replace(s.cve_url, '{cve}', p_cve), true
-  FROM cve_vendor v JOIN source_url s ON s.source = v.source
-  WHERE v.cve_id = p_cve AND s.cve_url IS NOT NULL
+  -- a per-CVE template (source_url.cve_url) when the source has one; otherwise the ref the
+  -- source stored on its assessment (cve_vendor.data.ref) — e.g. Node.js links the specific
+  -- security-release blog post per CVE, which has no {cve} template form.
+  SELECT p_cve, 'L3 Downstream', v.source,
+         COALESCE(replace(s.cve_url, '{cve}', p_cve), v.data->>'ref'), true
+  FROM cve_vendor v LEFT JOIN source_url s ON s.source = v.source
+  WHERE v.cve_id = p_cve
+    AND (s.cve_url IS NOT NULL OR v.data ? 'ref')
     AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
 $fn$;

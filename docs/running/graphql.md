@@ -34,24 +34,31 @@ It is idempotent and does four things:
    … rows; `advisory` ↔ `advisory_cve`; `cve_cwe` → the `cwe` dictionary; and so on.
 3. **Tracks the `cve_levels` function** so the [advisory tiers](../advisory-tiers.md)
    are a GraphQL root field.
-4. **Grants** the `readonly` role SELECT on everything.
+4. **Grants** SELECT on everything to the `readonly`, `lve_writer` and `curation_writer`
+   roles, plus INSERT on `lve` (to `lve_writer`) and on `curation` (to `curation_writer`).
 
 ## Permissions
 
-Only the **`readonly`** role has access — it can run SELECT queries and nothing else.
-There is no anonymous access; an unauthenticated request is rejected. The Hasura admin
-secret is for setup only and is never handed to API consumers.
+Three roles exist. **`readonly`** can run SELECT queries and nothing else — it sees no
+mutations at all. **`lve_writer`** and **`curation_writer`** additionally get one insert:
+`insert_lve_one` / `insert_lve` and `insert_curation_one` / `insert_curation` respectively
+(no update or delete — those need the admin secret). There is no anonymous access; an
+unauthenticated request is rejected. The Hasura admin secret is for setup only and is never
+handed to API consumers. Curation rules are related from the spine as `cve.curations`, so a
+CVE's overrides are one traversal away.
 
 ## Read-only tokens
 
 API access uses an HS256 JWT signed with the shared `HASURA_JWT_SECRET`, carrying the
-`readonly` role. Mint one with [`create-token`](cli.md#create-token):
+`readonly` role (or a write role). Mint one with [`create-token`](cli.md#create-token):
 
 ```bash
-docker compose exec ingest vdb create-token --ttl 90
+docker compose exec ingest vdb create-token --ttl 90                           # read-only
+docker compose exec ingest vdb create-token --role lve_writer,curation_writer  # + both writes
 ```
 
-The token's claims pin the role:
+`--role` takes one or several comma-separated roles; `readonly` is always included and the
+first role is the default. The read-only token's claims pin the role:
 
 ```json
 {

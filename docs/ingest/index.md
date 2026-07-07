@@ -25,9 +25,9 @@ vdb ingest all           # write everything that was synced
 | Group | Members |
 |-------|---------|
 | `reference` | `cna`, `cpe`, `cwe`, `source_urls` |
-| `records` | `cvelistv5` |
+| `records` | `cvelistv5`, `nvd` |
 | `scoring` | `epss`, `kev`, `ssvc` |
-| `advisories` | `redhat`, `suse`, `ubuntu`, `debian`, `oracle`, `almalinux`, `rocky`, `microsoft`, `ghsa`, `osv` |
+| `advisories` | `redhat`, `suse`, `ubuntu`, `debian`, `oracle`, `almalinux`, `rocky`, `microsoft`, `ghsa`, `osv`, `nodejs` |
 | `exploits` | `exploitdb`, `metasploit`, `nuclei`, `poc_github` |
 
 See the [Ingest CLI](../running/cli.md) reference and the

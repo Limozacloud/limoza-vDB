@@ -31,6 +31,43 @@ SCHEME = {
 _SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
+# ── curation: human overrides applied at match time (see the `curation` table) ────────────
+# A rule targets a CVE and, via its non-NULL selector fields, a subset of that CVE's affected
+# rows: suppress drops them, set_status forces a status, set_fixed corrects a bound. Loaded once
+# per match() call (or passed in for a bulk run) and applied after the affected rows are fetched.
+_CUR_SEL = ("coord", "ecosystem", "package", "cpe23", "release", "source")
+
+
+def load_curations(conn) -> dict:
+    """Active curation rules → {cve_id: [rule dict, …]} (expired rules excluded)."""
+    cols = ("cve_id", "action", *_CUR_SEL, "status", "fixed", "introduced", "last_affected")
+    out = {}
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {','.join(cols)} FROM curation "
+                    "WHERE expires_at IS NULL OR expires_at > now()")
+        for r in cur.fetchall():
+            d = dict(zip(cols, r))
+            out.setdefault(d["cve_id"], []).append(d)
+    return out
+
+
+def _curate(cid, ctx, curations):
+    """Apply matching curation rules to one affected row's context (dict with the selector +
+    status/fixed/introduced/last_affected). Returns the (possibly mutated) ctx, or None to
+    suppress. Selector: a non-NULL rule field must equal the row's value (case-insensitive)."""
+    for c in curations.get(cid, ()):  # ()=no rules for this cve
+        if any(c[k] is not None and (ctx.get(k) or "").lower() != c[k].lower() for k in _CUR_SEL):
+            continue                                              # selector doesn't match this row
+        if c["action"] == "suppress":
+            return None
+        if c["action"] == "set_status":
+            ctx["status"] = c["status"]
+        elif c["action"] == "set_fixed":
+            for f in ("fixed", "introduced", "last_affected"):
+                if c[f] is not None:
+                    ctx[f] = c[f]
+    return ctx
+
 # scanners emit the purl distro as ID-VERSION_ID (debian-11, ubuntu-22.04); the Debian/Ubuntu
 # trackers — and so our affected rows — are keyed by codename. Map to codename; pass through
 # values that are already a codename.
@@ -46,13 +83,14 @@ _DISTRO_CODENAME = {
 
 
 def _v(scheme, s):
-    cls = SCHEME.get(scheme, GenericVersion)
-    for c in (cls, GenericVersion):
-        try:
-            return c(s)
-        except Exception:
-            continue
-    return None
+    # Parse with the scheme's OWN class only — no GenericVersion cross-fallback. The fallback let a
+    # non-version value (e.g. an OSV "GIT" commit hash stored in `fixed`) parse as GenericVersion,
+    # which then crashed the compare (PypiVersion < GenericVersion → TypeError → whole component
+    # "unknown"). Unparseable in the scheme → None → that bound is skipped, not mixed.
+    try:
+        return SCHEME.get(scheme, GenericVersion)(s)
+    except Exception:
+        return None
 
 
 def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
@@ -96,13 +134,38 @@ def parse_purl(purl):
     return ptype, name, version or None, quals
 
 
+_EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
+# scanners label RHEL-family distros as <name>-<major>[.<minor>] (redhat-9.3, rhel-9, centos-9,
+# rocky-9, almalinux-9, oraclelinux-9, ol9); normalise those to the el-tag form.
+_RPM_DISTRO = re.compile(
+    r"^(?:rhel|redhat|centos|rocky(?:linux)?|alma(?:linux)?|oracle(?:linux)?|ol)[-_ ]?(\d+)(?:[.](\d+))?$",
+    re.I)
+
+
+def _el_streams(major, minor):
+    """el9_3 → [el9, el9_0, … el9_3]. Red Hat keys affected/won't-fix at the major stream and
+    fixes at the specific minor; a host on 9.3 inherits every fix from 9.0–9.3."""
+    if minor is None:
+        return [f"el{major}"]
+    return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+
+
+def _rpm_streams(version, rel):
+    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative; an explicit
+    release / `distro=` (el9, redhat-9.3, centos-9, rocky-9, …) is the fallback when the version
+    carries no tag."""
+    m = _DIST.search(version or "")
+    if m:
+        major, _, minor = m.group(1).partition("_")
+        return _el_streams(major, minor if minor.isdigit() else None)
+    m = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
+    return _el_streams(m.group(1), m.group(2)) if m else None
+
+
 def _lane(ptype, version, quals, release=None):
-    """→ (ecosystem, release) for the affected lookup."""
+    """→ (ecosystem, release) for the affected lookup. `release` may be a list (rpm streams)."""
     if ptype == "rpm":
-        if not release:
-            m = _DIST.search(version or "")
-            release = f"el{m.group(1)}" if m else None
-        return "rpm", release
+        return "rpm", _rpm_streams(version, release or quals.get("distro"))
     if ptype == "deb":
         rel = release or quals.get("distro")
         return "deb", _DISTRO_CODENAME.get(rel, rel)     # debian-11 → bullseye
@@ -127,13 +190,13 @@ def parse_cpe(cpe):
 
 
 def _cpe_verdict(installed, rows):
-    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status).
+    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status, fix_kb).
 
     Group by ``introduced`` (= one affected range). Within a group the host counts as
     patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
     (Windows security-only vs monthly rollup, with different build numbers) don't
     false-positive. Distinct ranges (different ``introduced``) are OR'd as usual.
-    Returns [(src, status, fixed), …] or [] when not vulnerable.
+    Returns [(src, status, fixed, fix_kb), …] or [] when not vulnerable.
     """
     groups = {}
     for r in rows:
@@ -157,19 +220,19 @@ def _cpe_verdict(installed, rows):
         if fixes:
             if all(iv < fv for _, fv in fixes):           # not reached by any fix track
                 rep, _fv = min(fixes, key=lambda x: x[1])
-                hits.append((rep[0], rep[5], rep[2]))
+                hits.append((rep[0], rep[5], rep[2], rep[6]))
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
-                hits.append((lasts[0][0][0], lasts[0][0][5], None))
+                hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6]))
         elif had_bounds:
             continue                                       # had a fixed/last bound but it didn't
             #                                                parse → can't decide → don't flag (no FP)
         else:
-            hits.append((group[0][0], group[0][5], None))  # genuinely no bound → open-ended affected
+            hits.append((group[0][0], group[0][5], None, group[0][6]))  # no bound → open-ended affected
     return hits
 
 
-def match_cpe(conn, cpe, version=None):
+def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
     version = version or cv
@@ -177,33 +240,55 @@ def match_cpe(conn, cpe, version=None):
         raise ValueError("not a cpe 2.3 string")
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
-    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status "
+    if curations is None:
+        curations = load_curations(conn)
+    pkg = key.split(":")[4]
+    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb "
            "FROM affected WHERE coord = 'cpe' AND cpe23 = %s")
     by_cve = {}
     with conn.cursor() as cur:
         cur.execute(sql, (key,))
-        for cid, src, intro, fixed, last, scheme, status in cur.fetchall():
-            by_cve.setdefault(cid, []).append((src, intro, fixed, last, scheme, status))
+        for cid, src, intro, fixed, last, scheme, status, kb in cur.fetchall():
+            ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
+                                "release": None, "source": src, "status": status,
+                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+            if ctx is None:
+                continue                                          # suppressed by a curation rule
+            by_cve.setdefault(cid, []).append(
+                (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme, ctx["status"], kb))
     return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
 
 
-def match(conn, purl, version=None, release=None):
-    """Return {cve_id: [(source, status, fixed), …]} for the vulnerable hits."""
+def match(conn, purl, version=None, release=None, curations=None):
+    """Return {cve_id: [(source, status, fixed, fix_kb), …]} for the vulnerable hits."""
+    if curations is None:
+        curations = load_curations(conn)
     if purl.startswith("cpe:"):
-        return match_cpe(conn, purl, version)
+        return match_cpe(conn, purl, version, curations)
     ptype, name, pv, quals = parse_purl(purl)
     version = version or pv
     if not version:
         raise ValueError("no version (give pkg@version or a second arg)")
+    if ptype == "rpm" and quals.get("epoch") and ":" not in version:
+        version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    sql = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
-           "version_scheme, status FROM affected "
-           "WHERE ecosystem = %s AND lower(package) = lower(%s) "
-           "AND (release = %s OR (%s::text IS NULL AND release IS NULL))")
+    base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
+            "version_scheme, status FROM affected "
+            "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
+    if isinstance(rel, list):                       # rpm → match the major + minor streams
+        sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
+    else:                                           # deb / ecosystem → exact release or NULL
+        sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
+        params = (eco, name, rel, rel)
     findings = {}
     with conn.cursor() as cur:
-        cur.execute(sql, (eco, name, rel, rel))
-        for cid, src, _r, intro, fixed, last, scheme, status in cur.fetchall():
-            if is_vulnerable(scheme, version, intro, fixed, last, status):
-                findings.setdefault(cid, []).append((src, status, fixed))
+        cur.execute(sql, params)
+        for cid, src, rel_row, intro, fixed, last, scheme, status in cur.fetchall():
+            ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
+                                "release": rel_row, "source": src, "status": status,
+                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+            if ctx is None:
+                continue                                          # suppressed by a curation rule
+            if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
+                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None))
     return findings

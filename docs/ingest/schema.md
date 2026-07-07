@@ -201,9 +201,11 @@ The version-precise layer derived by the `vdb affected` pass — one row per
 | `ecosystem` / `package` / `release` | text | purl-lane identity (rpm/deb/pypi/…, name, distro release) |
 | `cpe23` | text | cpe-lane identity — canonical, NVD-validated `vendor:product` |
 | `introduced` / `fixed` / `last_affected` | text | the version range (fixed = exclusive, last_affected = inclusive) |
+| `fix_kb` | text | remediation reference for the fix — a Microsoft MSRC KB (e.g. `KB5043050`); NULL for distro/ecosystem sources |
 | `version_scheme` | text | comparison scheme (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
 | `status` | text | canonical VEX status (`not_affected` / `under_investigation` / `affected` / `fixed` / `wont_fix` / `unknown`) |
 | `status_raw` | text | the source's original wording |
+| `justification` | text | why the status was derived (e.g. `urgency: unimportant`, `nodsa: ignored`) — surfaced by `explain_status` |
 | `source` / `status_source` / `origin` | text | author / who decided / importer (delete-scope key) |
 
 Tracked in Hasura (related from `cve`); the
@@ -217,7 +219,28 @@ the source of truth for vulns not in any public feed. Same shape as `affected` (
 `LVE-YYYY-NNNN`, plus `title` / `description` / `severity` / `created_by`). An `AFTER`
 trigger (`lve_sync`) materialises each row into `affected` (`origin='lve'`) immediately,
 and the `lve` affected-extractor re-seeds it on every rebuild — so LVEs survive a
-truncate. Insert is gated by the `lve_writer` Hasura role.
+truncate. Insert is gated by the `lve_writer` Hasura role. `ecosystem` cannot be `generic`
+(`CHECK (ecosystem IS DISTINCT FROM 'generic')`) — a generic purl never matches a scanned
+component, so the product must be identified by a CPE or an ecosystem/distro purl.
+
+### `curation`
+
+Human corrections/suppressions applied at **match time** — for when a source is wrong for
+our purposes. Never touched by sync (survives every rebuild, like `lve`), and applied by the
+[matcher](../affected-versions.md#the-matcher) *after* it fetches the affected rows, so the
+raw upstream data stays intact for audit. Each rule targets a `cve_id` and, via its non-NULL
+selector fields (`coord` / `ecosystem` / `package` / `cpe23` / `release` / `source`), a subset
+of that CVE's rows:
+
+| `action` | Effect |
+|----------|--------|
+| `suppress` | the matched rows are dropped (a false positive / not-applicable finding) |
+| `set_status` | force a status (e.g. `wont_fix` / `not_affected` → the matcher skips it, but it stays visible in GraphQL with the reason) |
+| `set_fixed` | correct the `fixed` / `introduced` / `last_affected` bound |
+
+`reason` is required; `created_by` / `expires_at` (auto-expiry) optional. Tracked in Hasura and
+related from `cve` as `curations`; insert is gated by the `curation_writer` role. Created via
+`POST /curation` or the `insert_curation_one` GraphQL mutation.
 
 ---
 

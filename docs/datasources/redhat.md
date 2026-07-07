@@ -26,10 +26,10 @@ vulnerabilities[]/
 ├── remediations[workaround].details    ✅ → cve_workaround.value
 ├── remediations[mitigation].details    ✅ → cve_solution.value
 ├── threats[impact].details             ✅ → cve_impact.description (fallback)
-├── product_status / product_tree       ✗  affected/fixed package status is a later phase
+├── product_status / product_tree       ✅ → affected (coord=purl) — full VEX status + fix versions
 └── document.aggregate_severity.text    ✅ → cve_vendor.data.severity
 
-Legend: ✅ imported  ✗ not imported (yet)
+Legend: ✅ imported  ✗ not imported
 ```
 
 ## CSAF-Advisories
@@ -61,8 +61,10 @@ document/
   `redhat` → `access.redhat.com/security/cve/{cve}`).
 - RHSA advisories are the upstream reference for [AlmaLinux](almalinux.md) and
   [Rocky Linux](rocky.md), whose errata rebuild Red Hat's fixes.
-- Affected/fixed package status (purls, version ranges) is a later phase and not
-  written yet.
+- Red Hat's CSAF VEX is the reference for the [affected layer](../affected-versions.md):
+  `product_status` (known_affected / known_not_affected / fixed) + `product_tree` →
+  `affected` rows (`coord=purl`), with `no_fix_planned` remediations mapped to `wont_fix`.
+  AlmaLinux, Rocky and Oracle Linux inherit these ranges.
 
 ---
 
@@ -81,6 +83,7 @@ cve_alias          ❌
 advisory           ✅  RHSA — id/url (VEX) + title/severity/dates (advisories feed)
 advisory_cve       ✅  RHSA ↔ CVE
 cve_vendor         ✅  {"severity": aggregate_severity}
+affected           ✅  product_status + product_tree → coord=purl (status incl. wont_fix; reference impl.)
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

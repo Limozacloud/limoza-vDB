@@ -12,7 +12,7 @@ file covering all currently maintained major releases.
   over `<definition class="patch">` elements
 - **Content:** ELSA-\* (Oracle Linux Security Advisory) definitions with their CVE
   references, advisory severity, title, issued date, and per-CVE CVSS v3 vectors and
-  scores. Per-package fix tests embedded in the OVAL criteria tree are a later phase.
+  scores. The OVAL criteria fix tests drive the affected layer.
 
 ```
 oval_definitions/definitions/definition[@class="patch"]/
@@ -26,9 +26,9 @@ oval_definitions/definitions/definition[@class="patch"]/
 │       ├── issued[@date]               ✅ → advisory.published
 │       └── cve[@cvss3]                 ✅ → cve_cvss.{base_score, vector, version, severity}
 │                                           (parsed as "<score>/CVSS:<version>/..." per CVE element)
-└── criteria/                           ✗  per-package fix tests — later phase
+└── criteria/                           ✅ → affected (coord=purl, via the OVAL fix tests)
 
-Legend: ✅ imported  ✗ not imported (yet)
+Legend: ✅ imported  ✗ not imported
 ```
 
 ## Notes
@@ -48,8 +48,8 @@ Legend: ✅ imported  ✗ not imported (yet)
 - The OVAL file covers all currently maintained major releases (e.g. Oracle Linux 7, 8, 9,
   10). Unlike AlmaLinux and Rocky, this source **does** carry per-CVE CVSS v3 data.
 - The advisory has only an `issued` date — no `modified`/updated date is present.
-- Affected/fixed package status (purls, version ranges) is a later phase and not
-  written yet.
+- Oracle Linux's OVAL fix tests drive the [affected layer](../affected-versions.md)
+  (`coord=purl`), alongside the Red Hat ranges Oracle inherits.
 
 ---
 
@@ -68,6 +68,7 @@ cve_alias          ❌
 advisory           ✅  ELSA — id / title / severity / published / url
 advisory_cve       ✅  ELSA ↔ CVE
 cve_vendor         ✅  {"severity": "<highest ELSA severity for this CVE>"}
+affected           ✅  OVAL fix tests + Red Hat-inherited ranges → coord=purl
 exploits           ❌
 epss / kev / ssvc  ❌  their own sources
 ```

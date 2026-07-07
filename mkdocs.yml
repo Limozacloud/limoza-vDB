@@ -25,6 +25,7 @@ nav:
     - Overview: datasources/index.md
     - CVE baseline:
       - CVE List (MITRE): datasources/cvelistv5.md
+      - NVD: datasources/nvd.md
     - Linux distributions:
       - Red Hat: datasources/redhat.md
       - SUSE: datasources/suse.md
@@ -35,6 +36,7 @@ nav:
       - Oracle Linux: datasources/oracle.md
     - OS / vendor:
       - Microsoft MSRC: datasources/microsoft.md
+      - Node.js: datasources/nodejs.md
     - Package ecosystems:
       - GitHub Advisories: datasources/ghsa.md
       - OSV ecosystems: datasources/osv.md

@@ -19,7 +19,7 @@ from psycopg2.extras import execute_values
 # column order — shared by row() and flush()
 COLS = (
     "cve_id", "coord", "ecosystem", "package", "purl", "cpe23", "release",
-    "introduced", "fixed", "last_affected", "version_scheme",
+    "introduced", "fixed", "last_affected", "fix_kb", "version_scheme",
     "status", "status_raw", "justification", "source", "status_source", "origin",
 )
 

@@ -26,7 +26,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.core.db import get_conn
-from ingest.match import match, parse_cpe, parse_purl
+from ingest.match import load_curations, match, parse_cpe, parse_purl
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -55,9 +55,10 @@ def _fmt(findings: dict) -> list:
     out = []
     for cid, hits in sorted(findings.items()):
         out.append({"id": cid,
-                    "fixed": next((f for _, _, f in hits if f), None),
+                    "fixed": next((f for _, _, f, _ in hits if f), None),
+                    "fix_kb": next((k for _, _, _, k in hits if k), None),
                     "status": hits[0][1],
-                    "sources": sorted({s for s, _, _ in hits})})
+                    "sources": sorted({s for s, _, _, _ in hits})})
     return out
 
 
@@ -65,6 +66,7 @@ def _bulk_match(components: list) -> list:
     """Match a batch; identical (ident, version, release) tuples are computed once."""
     conn = get_conn()
     try:
+        curations = load_curations(conn)          # load once, apply to every component
         cache, results = {}, []
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
@@ -76,12 +78,60 @@ def _bulk_match(components: list) -> list:
             k = (ident, ver, rel)
             if k not in cache:
                 try:
-                    f = match(conn, ident, ver, rel)
+                    f = match(conn, ident, ver, rel, curations)
                     cache[k] = {"status": "vulnerable" if f else "compliant", "cves": _fmt(f)}
                 except Exception as e:
                     cache[k] = {"status": "unknown", "cves": [], "error": str(e)}
             results.append({"component": ident, "version": ver, **cache[k]})
         return results
+    finally:
+        conn.close()
+
+
+_CUR_ACTIONS = ("suppress", "set_status", "set_fixed")
+_CUR_STATUS = ("not_affected", "under_investigation", "affected", "fixed", "wont_fix", "unknown")
+
+
+def _create_curation(d: dict) -> dict:
+    """Insert a curation rule. Required: cve_id, action, reason. Selector + new-value fields
+    are optional per action (validated to mirror the table CHECKs)."""
+    cve, action, reason = d.get("cve_id"), d.get("action"), d.get("reason")
+    if not cve or not action or not reason:
+        raise ValueError("cve_id, action and reason are required")
+    if action not in _CUR_ACTIONS:
+        raise ValueError(f"action must be one of {', '.join(_CUR_ACTIONS)}")
+    if action == "set_status":
+        if d.get("status") not in _CUR_STATUS:
+            raise ValueError(f"set_status needs status ∈ {', '.join(_CUR_STATUS)}")
+    if action == "set_fixed" and not any(d.get(f) for f in ("fixed", "introduced", "last_affected")):
+        raise ValueError("set_fixed needs at least one of fixed / introduced / last_affected")
+    cols = ("cve_id", "action", "coord", "ecosystem", "package", "cpe23", "release", "source",
+            "status", "fixed", "introduced", "last_affected", "reason", "created_by", "expires_at")
+    rec = {c: d.get(c) for c in cols if d.get(c) is not None}
+    rec["cve_id"], rec["action"], rec["reason"] = cve, action, reason
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"INSERT INTO curation ({','.join(rec)}) "
+                        f"VALUES ({','.join(['%s'] * len(rec))}) RETURNING id",
+                        list(rec.values()))
+            rec["id"] = cur.fetchone()[0]
+        conn.commit()
+        return rec
+    finally:
+        conn.close()
+
+
+def _list_curations() -> list:
+    conn = get_conn()
+    try:
+        cols = ("id", "cve_id", "action", "coord", "ecosystem", "package", "cpe23", "release",
+                "source", "status", "fixed", "introduced", "last_affected", "reason",
+                "created_by", "created_at", "expires_at")
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {','.join(cols)} FROM curation ORDER BY created_at DESC LIMIT 1000")
+            return [{c: (v.isoformat() if hasattr(v, "isoformat") else v)
+                     for c, v in zip(cols, row)} for row in cur.fetchall()]
     finally:
         conn.close()
 
@@ -94,6 +144,11 @@ def _create_lve(d: dict) -> dict:
         ident = {"coord": "cpe", "cpe23": key}
     else:
         ptype, name, _, quals = parse_purl(d["product"])
+        if ptype == "generic":
+            raise ValueError(
+                "generic purls are not allowed for LVEs — a generic purl never matches a scanned "
+                "component. Identify the product with a CPE 2.3 string (cpe:2.3:...) or an "
+                "ecosystem/distro purl (pkg:rpm|deb|apk|pypi|npm|gem|golang|maven|cargo/...).")
         ident = {"coord": "purl", "ecosystem": ptype, "package": name, "purl": d["product"]}
         if quals.get("distro"):
             ident["release"] = quals["distro"]
@@ -130,6 +185,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+        elif self.path == "/curation":
+            payload = _verify(self.headers.get("Authorization", "").removeprefix("Bearer ").strip())
+            if _SECRET and not payload:
+                return self._json(401, {"error": "unauthorized"})
+            self._json(200, {"curations": _list_curations()})
         else:
             self._json(404, {"error": "not found"})
 
@@ -161,6 +221,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(201, {"created": True, **_create_lve(body)})
             except Exception as e:
                 self._json(400, {"created": False, "error": str(e)})
+        elif self.path == "/curation":
+            if _SECRET and "curation_writer" not in _roles(payload):
+                return self._json(403, {"error": "curation_writer role required"})
+            try:
+                self._json(201, {"created": True, **_create_curation(body)})
+            except Exception as e:
+                self._json(400, {"created": False, "error": str(e)})
         else:
             self._json(404, {"error": "not found"})
 
@@ -172,7 +239,8 @@ def main() -> int:
     port = int(os.environ.get("API_PORT", "8770"))
     if not _SECRET:
         print("WARNING: HASURA_JWT_SECRET not set — REST API is UNAUTHENTICATED", flush=True)
-    print(f"limoza-vDB REST API on :{port}  (POST /match · POST /lve · GET /healthz)", flush=True)
+    print(f"limoza-vDB REST API on :{port}  "
+          f"(POST /match · POST /lve · POST/GET /curation · GET /healthz)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
     return 0
 
