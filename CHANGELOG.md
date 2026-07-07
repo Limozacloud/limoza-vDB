@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.2.0...v0.3.0) (2026-07-07)
+
+
+### Features
+
+* matcher accuracy, fix_kb, curation layer, Node.js source, read-only MCP ([#19](https://github.com/Limozacloud/limoza-vDB/issues/19)) ([a8d1cfc](https://github.com/Limozacloud/limoza-vDB/commit/a8d1cfc89e80992fa36f01e761efba9615aa3215))
+
 ## [0.2.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.1.1...v0.2.0) (2026-06-26)
 
 
