@@ -26,7 +26,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.core.db import get_conn
-from ingest.match import load_curations, match, parse_cpe, parse_purl
+from ingest.match import load_curations, match, parse_cpe, parse_purl, remediation
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -55,10 +55,10 @@ def _fmt(findings: dict) -> list:
     out = []
     for cid, hits in sorted(findings.items()):
         out.append({"id": cid,
-                    "fixed": next((f for _, _, f, _ in hits if f), None),
-                    "fix_kb": next((k for _, _, _, k in hits if k), None),
+                    "fixed": next((f for _, _, f, _, _ in hits if f), None),
+                    "fix_kb": next((k for _, _, _, k, _ in hits if k), None),
                     "status": hits[0][1],
-                    "sources": sorted({s for s, _, _, _ in hits})})
+                    "sources": sorted({s for s, _, _, _, _ in hits})})
     return out
 
 
@@ -79,7 +79,8 @@ def _bulk_match(components: list) -> list:
             if k not in cache:
                 try:
                     f = match(conn, ident, ver, rel, curations)
-                    cache[k] = {"status": "vulnerable" if f else "compliant", "cves": _fmt(f)}
+                    cache[k] = {"status": "vulnerable" if f else "compliant",
+                                "remediation": remediation(f), "cves": _fmt(f)}
                 except Exception as e:
                     cache[k] = {"status": "unknown", "cves": [], "error": str(e)}
             results.append({"component": ident, "version": ver, **cache[k]})

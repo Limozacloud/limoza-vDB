@@ -196,7 +196,7 @@ def _cpe_verdict(installed, rows):
     patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
     (Windows security-only vs monthly rollup, with different build numbers) don't
     false-positive. Distinct ranges (different ``introduced``) are OR'd as usual.
-    Returns [(src, status, fixed, fix_kb), …] or [] when not vulnerable.
+    Returns [(src, status, fixed, fix_kb, scheme), …] or [] when not vulnerable.
     """
     groups = {}
     for r in rows:
@@ -220,15 +220,15 @@ def _cpe_verdict(installed, rows):
         if fixes:
             if all(iv < fv for _, fv in fixes):           # not reached by any fix track
                 rep, _fv = min(fixes, key=lambda x: x[1])
-                hits.append((rep[0], rep[5], rep[2], rep[6]))
+                hits.append((rep[0], rep[5], rep[2], rep[6], scheme))
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
-                hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6]))
+                hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6], scheme))
         elif had_bounds:
             continue                                       # had a fixed/last bound but it didn't
             #                                                parse → can't decide → don't flag (no FP)
         else:
-            hits.append((group[0][0], group[0][5], None, group[0][6]))  # no bound → open-ended affected
+            hits.append((group[0][0], group[0][5], None, group[0][6], scheme))  # no bound → open-ended
     return hits
 
 
@@ -260,7 +260,7 @@ def match_cpe(conn, cpe, version=None, curations=None):
 
 
 def match(conn, purl, version=None, release=None, curations=None):
-    """Return {cve_id: [(source, status, fixed, fix_kb), …]} for the vulnerable hits."""
+    """Return {cve_id: [(source, status, fixed, fix_kb, scheme), …]} for the vulnerable hits."""
     if curations is None:
         curations = load_curations(conn)
     if purl.startswith("cpe:"):
@@ -290,5 +290,38 @@ def match(conn, purl, version=None, release=None, curations=None):
             if ctx is None:
                 continue                                          # suppressed by a curation rule
             if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
-                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None))
+                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
     return findings
+
+
+def remediation(findings: dict):
+    """The single highest fix that closes a matched component's fixable CVEs, and which CVE
+    demands it — so a caller can say "upgrade to X → closes N". `findings` is the dict match()
+    returns ({cve: [(src, status, fixed, fix_kb, scheme), …]}).
+
+    Per CVE we take its one fix (first non-NULL). The max is computed with ONE comparator: rpm/deb
+    keep their EVR comparator (epoch matters), everything else orders as `generic` (MavenVersion
+    covers the cpe generic/semver/pep440 mix + pypi/npm — all plain X.Y.Z). CVEs with no fix are
+    counted in `unfixed` (an upgrade can't close them), so "closes all" never lies.
+    Returns None for an empty (compliant) set.
+    """
+    if not findings:
+        return None
+    fixable, unfixed = [], 0
+    for cve, hits in findings.items():
+        f = next((h[2] for h in hits if h[2]), None)
+        if f:
+            fixable.append((cve, f,
+                            next((h[3] for h in hits if h[3]), None),      # fix_kb
+                            next((h[4] for h in hits), "generic")))         # scheme
+        else:
+            unfixed += 1
+    if not fixable:
+        return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
+    schemes = {s for *_, s in fixable}
+    comp = "rpm" if "rpm" in schemes else "deb" if "deb" in schemes else "generic"
+    parseable = [(cve, f, kb) for cve, f, kb, _s in fixable if _v(comp, f) is not None]
+    if not parseable:                                       # nothing comparable → don't invent a max
+        return {"fixed": None, "fix_kb": None, "cve": None, "closes": len(fixable), "unfixed": unfixed}
+    top = max(parseable, key=lambda x: _v(comp, x[1]))
+    return {"fixed": top[1], "fix_kb": top[2], "cve": top[0], "closes": len(fixable), "unfixed": unfixed}

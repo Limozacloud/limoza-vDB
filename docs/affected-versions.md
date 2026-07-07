@@ -159,6 +159,10 @@ exposed as the [`vdb match`](running/cli.md#match) CLI and the
   set_fixed) before the verdict, so overrides always take effect without altering the raw data.
 
 Each finding carries the `fixed` version and, for Microsoft CPE hits, the `fix_kb` (MSRC KB).
+The matcher also derives a per-component **remediation** — the single highest fix that closes the
+component's fixable CVEs, which CVE demands it, its KB, and how many it `closes` vs leaves
+`unfixed` (CVEs with no fix). Surfaced as the `remediation` field of a [`/match`](running/rest-api.md)
+result ("upgrade to X → N closed").
 
 ```bash
 vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1
