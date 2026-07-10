@@ -75,6 +75,13 @@ def _bulk_match(components: list) -> list:
             ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
             ver = c.get("version") or ""
             rel = c.get("release") or None
+            if ident.startswith("pkg:rpm/"):
+                quals = parse_purl(ident)[3]
+                # a satellite package of a bigger build (upstream=… set, e.g. kernel-tools,
+                # python3-perf on a RHEL/SUSE kernel build) or an installed-but-not-running
+                # kernel (active=false) — the active main package already carries these CVEs.
+                if quals.get("upstream") or quals.get("active") == "false":
+                    continue
             k = (ident, ver, rel)
             if k not in cache:
                 try:
