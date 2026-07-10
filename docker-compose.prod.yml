@@ -26,6 +26,7 @@ services:
       - cpe:/data/cpe
       - cwe:/data/cwe
       - cvelistv5:/data/cvelistv5
+      - nvd:/data/nvd
       - redhat:/data/redhat
       - suse:/data/suse
       - ubuntu:/data/ubuntu
@@ -125,6 +126,7 @@ volumes:
   cpe: {}
   cwe: {}
   cvelistv5: {}
+  nvd: {}
   redhat: {}
   suse: {}
   ubuntu: {}

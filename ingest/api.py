@@ -75,13 +75,25 @@ def _bulk_match(components: list) -> list:
             ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
             ver = c.get("version") or ""
             rel = c.get("release") or None
-            if ident.startswith("pkg:rpm/"):
+            if ident.startswith("pkg:rpm/") or ident.startswith("pkg:deb/"):
                 quals = parse_purl(ident)[3]
-                # a satellite package of a bigger build (upstream=… set, e.g. kernel-tools,
-                # python3-perf on a RHEL/SUSE kernel build) or an installed-but-not-running
-                # kernel (active=false) — the active main package already carries these CVEs.
-                if quals.get("upstream") or quals.get("active") == "false":
+                # an installed-but-not-running kernel build (active=false, rpm or deb) — the
+                # active main package already carries these CVEs.
+                if quals.get("active") == "false":
                     continue
+                # a satellite package of a bigger kernel build — the main kernel package
+                # already covers it: rpm (upstream=kernel, e.g. kernel-tools, python3-perf on
+                # a RHEL/SUSE build) or deb (upstream starts with "linux", e.g. linux-headers-*,
+                # linux-*-gcp-6.17 — Ubuntu's per-flavor source names: linux, linux-meta,
+                # linux-signed, linux-gcp-6.17, linux-meta-gcp-6.17, ...). Skip this check for
+                # active=true — on deb the running kernel image itself also carries an upstream
+                # qualifier (linux-image-*-gcp?upstream=linux-signed-gcp-6.17&active=true), unlike
+                # rpm's kernel-core which carries none; active=true always wins.
+                if quals.get("active") != "true":
+                    upstream = quals.get("upstream") or ""
+                    if ((ident.startswith("pkg:rpm/") and upstream == "kernel")
+                            or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
+                        continue
             k = (ident, ver, rel)
             if k not in cache:
                 try:
