@@ -37,6 +37,7 @@ services:
       - microsoft:/data/microsoft
       - ghsa:/data/ghsa
       - osv:/data/osv
+      - nodejs:/data/nodejs
       - exploitdb:/data/exploitdb
       - metasploit:/data/metasploit
       - nuclei:/data/nuclei
@@ -137,6 +138,7 @@ volumes:
   microsoft: {}
   ghsa: {}
   osv: {}
+  nodejs: {}
   exploitdb: {}
   metasploit: {}
   nuclei: {}
