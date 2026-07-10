@@ -69,11 +69,13 @@ services:
     env_file: .env
     environment:
       GRAPHQL_URL:       http://hasura:8080/v1/graphql
+      API_URL:           http://api:8770
       HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
     ports:
       - "8765:8765"
     depends_on:
       - hasura
+      - api
     restart: unless-stopped
 
   api:
