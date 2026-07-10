@@ -31,6 +31,12 @@ SCHEME = {
 _SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
+# Ubuntu's "-signed" kernel packages (secure-boot signature wrapper around a flavor's real
+# build, e.g. linux-image-*-gcp → upstream=linux-signed-gcp-6.17) are never tracked as their
+# own entity in Ubuntu's security data — only the base flavor build is (linux-gcp, linux-hwe,
+# generic → plain "linux"). Strip "signed-" and any trailing HWE version tag before lookup.
+_UBUNTU_SIGNED = re.compile(r"^linux-signed(?:-([a-z]+))?")
+
 # ── curation: human overrides applied at match time (see the `curation` table) ────────────
 # A rule targets a CVE and, via its non-NULL selector fields, a subset of that CVE's affected
 # rows: suppress drops them, set_status forces a status, set_fixed corrects a bound. Loaded once
@@ -127,6 +133,10 @@ def parse_purl(purl):
         # Debian/RPM advisories are keyed by SOURCE package; scanners put the binary in the
         # purl name and the source in the `upstream` qualifier (zlib1g-dev → upstream=zlib).
         name = quals.get("upstream") or parts[-1]
+        if ptype == "deb":
+            m = _UBUNTU_SIGNED.match(name)
+            if m:
+                name = f"linux-{m.group(1)}" if m.group(1) else "linux"
     elif ptype == "maven":
         name = ":".join(parts[1:])
     else:

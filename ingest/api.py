@@ -76,7 +76,7 @@ def _bulk_match(components: list) -> list:
             ver = c.get("version") or ""
             rel = c.get("release") or None
             if ident.startswith("pkg:rpm/") or ident.startswith("pkg:deb/"):
-                quals = parse_purl(ident)[3]
+                _, name, _, quals = parse_purl(ident)
                 # an installed-but-not-running kernel build (active=false, rpm or deb) — the
                 # active main package already carries these CVEs.
                 if quals.get("active") == "false":
@@ -85,13 +85,19 @@ def _bulk_match(components: list) -> list:
                 # already covers it: rpm (upstream=kernel, e.g. kernel-tools, python3-perf on
                 # a RHEL/SUSE build) or deb (upstream starts with "linux", e.g. linux-headers-*,
                 # linux-*-gcp-6.17 — Ubuntu's per-flavor source names: linux, linux-meta,
-                # linux-signed, linux-gcp-6.17, linux-meta-gcp-6.17, ...). Skip this check for
-                # active=true — on deb the running kernel image itself also carries an upstream
-                # qualifier (linux-image-*-gcp?upstream=linux-signed-gcp-6.17&active=true), unlike
-                # rpm's kernel-core which carries none; active=true always wins.
+                # linux-signed, linux-gcp-6.17, linux-meta-gcp-6.17, ...). rpm's bare kernel
+                # roots (kernel, kernel-uek, kernel-rt, ...) carry no upstream qualifier (they
+                # ARE their own upstream, so scanners skip the redundant tag) — caught instead
+                # by name.startswith("kernel"). Safe because active=true always wins first:
+                # this whole check only applies to non-active entries, so an actually-running
+                # kernel-rt (or any other kernel-family root) is never hidden — only inactive/
+                # duplicate installs are, exactly like an inactive standard kernel build. On deb
+                # the running kernel image itself also carries an upstream qualifier
+                # (linux-image-*-gcp?upstream=linux-signed-gcp-6.17&active=true), unlike rpm's
+                # kernel-core which carries none — same active=true-wins logic applies there too.
                 if quals.get("active") != "true":
                     upstream = quals.get("upstream") or ""
-                    if ((ident.startswith("pkg:rpm/") and upstream == "kernel")
+                    if ((ident.startswith("pkg:rpm/") and (upstream == "kernel" or name.startswith("kernel")))
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             k = (ident, ver, rel)
