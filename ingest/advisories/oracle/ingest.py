@@ -2,7 +2,8 @@
 
 Streams the 200+ MB XML with iterparse. Per ELSA: advisory + CVE links + per-CVE
 CVSS (score + vector from the cvss3 attribute). cve_vendor severity = the highest
-ELSA severity seen for each CVE. Per-package fix tests = phase-3 affected.
+ELSA severity seen for each CVE. Per-package fix tests → affected, see
+`ingest/affected/sources/oracle.py` (reads the same oval.xml independently).
 """
 import xml.etree.ElementTree as ET
 from pathlib import Path
