@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.3.0...v0.4.0) (2026-07-18)
+
+
+### Features
+
+* per-component remediation in /match (highest fix that closes all) ([#21](https://github.com/Limozacloud/limoza-vDB/issues/21)) ([247640a](https://github.com/Limozacloud/limoza-vDB/commit/247640ab7ae897deb6804163ee421ca2417c205e))
+
 ## [0.3.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.2.0...v0.3.0) (2026-07-07)
 
 
