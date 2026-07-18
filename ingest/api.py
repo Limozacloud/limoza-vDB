@@ -26,7 +26,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.core.db import get_conn
-from ingest.match import load_curations, match, parse_cpe, parse_purl
+from ingest.match import load_curations, match, parse_cpe, parse_purl, remediation
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -55,10 +55,10 @@ def _fmt(findings: dict) -> list:
     out = []
     for cid, hits in sorted(findings.items()):
         out.append({"id": cid,
-                    "fixed": next((f for _, _, f, _ in hits if f), None),
-                    "fix_kb": next((k for _, _, _, k in hits if k), None),
+                    "fixed": next((f for _, _, f, _, _ in hits if f), None),
+                    "fix_kb": next((k for _, _, _, k, _ in hits if k), None),
                     "status": hits[0][1],
-                    "sources": sorted({s for s, _, _, _ in hits})})
+                    "sources": sorted({s for s, _, _, _, _ in hits})})
     return out
 
 
@@ -75,11 +75,37 @@ def _bulk_match(components: list) -> list:
             ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
             ver = c.get("version") or ""
             rel = c.get("release") or None
+            if ident.startswith("pkg:rpm/") or ident.startswith("pkg:deb/"):
+                _, name, _, quals = parse_purl(ident)
+                # an installed-but-not-running kernel build (active=false, rpm or deb) — the
+                # active main package already carries these CVEs.
+                if quals.get("active") == "false":
+                    continue
+                # a satellite package of a bigger kernel build — the main kernel package
+                # already covers it: rpm (upstream=kernel, e.g. kernel-tools, python3-perf on
+                # a RHEL/SUSE build) or deb (upstream starts with "linux", e.g. linux-headers-*,
+                # linux-*-gcp-6.17 — Ubuntu's per-flavor source names: linux, linux-meta,
+                # linux-signed, linux-gcp-6.17, linux-meta-gcp-6.17, ...). rpm's bare kernel
+                # roots (kernel, kernel-uek, kernel-rt, ...) carry no upstream qualifier (they
+                # ARE their own upstream, so scanners skip the redundant tag) — caught instead
+                # by name.startswith("kernel"). Safe because active=true always wins first:
+                # this whole check only applies to non-active entries, so an actually-running
+                # kernel-rt (or any other kernel-family root) is never hidden — only inactive/
+                # duplicate installs are, exactly like an inactive standard kernel build. On deb
+                # the running kernel image itself also carries an upstream qualifier
+                # (linux-image-*-gcp?upstream=linux-signed-gcp-6.17&active=true), unlike rpm's
+                # kernel-core which carries none — same active=true-wins logic applies there too.
+                if quals.get("active") != "true":
+                    upstream = quals.get("upstream") or ""
+                    if ((ident.startswith("pkg:rpm/") and (upstream == "kernel" or name.startswith("kernel")))
+                            or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
+                        continue
             k = (ident, ver, rel)
             if k not in cache:
                 try:
                     f = match(conn, ident, ver, rel, curations)
-                    cache[k] = {"status": "vulnerable" if f else "compliant", "cves": _fmt(f)}
+                    cache[k] = {"status": "vulnerable" if f else "compliant",
+                                "remediation": remediation(f), "cves": _fmt(f)}
                 except Exception as e:
                     cache[k] = {"status": "unknown", "cves": [], "error": str(e)}
             results.append({"component": ident, "version": ver, **cache[k]})

@@ -18,15 +18,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+from api_client import ApiClient
 from config import load_settings
 from hasura import HasuraClient, request_token
-from matcher import check as match_check
 from queries import EXPLAIN_PACKAGE, EXPLAIN_STATUS, FULL_CVE_SCAN
 
 log = logging.getLogger("limoza-mcp")
 
 settings = load_settings()
 hasura = HasuraClient(settings)
+api = ApiClient(settings)
 
 mcp = FastMCP("limoza-vdb", stateless_http=True, host=settings.host, port=settings.port)
 
@@ -285,6 +286,16 @@ async def explain_status(cve_id: str = "", package: str = "", release: str = "")
                      "versions. A host is patched if its version >= the fixed version for that CVE.")}
 
 
+def _remap_cves(cves: list[dict]) -> list[dict]:
+    """REST's {id, fixed, fix_kb, status, sources} -> this tool's existing output shape."""
+    return [{"cve_id": c["id"], "status": c["status"], "fixed_version": c["fixed"],
+             "fix_kb": c.get("fix_kb"), "sources": c["sources"]} for c in cves]
+
+
+def _ecosystem_of(purl: str) -> str | None:
+    return purl[4:].partition("/")[0] or None if purl.startswith("pkg:") else None
+
+
 @mcp.tool()
 async def check_vulnerable(purl: str, version: str, release: str = "") -> dict:
     """Check whether an installed package version is affected by known CVEs (version-compared
@@ -307,14 +318,15 @@ async def check_vulnerable(purl: str, version: str, release: str = "") -> dict:
         version: the installed version string (e.g. "1.0.1e-30.el6_6.1", "2.25.1").
         release: distro release/codename — required for rpm/deb, leave empty for ecosystems.
     """
-    res = await match_check(hasura, purl, version, release or None)
-    cves = res["cves"]
+    res = await api.match([{"purl": purl, "version": version, "release": release or None}])
+    r = res["results"][0]
+    cves = _remap_cves(r.get("cves") or [])
     return {
-        "vulnerable": bool(cves),
+        "vulnerable": r["status"] == "vulnerable",
         "purl": purl,
         "version": version,
-        "ecosystem": res["ecosystem"],
-        "release": res["release"],
+        "ecosystem": _ecosystem_of(purl),
+        "release": release or None,
         "count": len(cves),
         "cves": cves,
     }
@@ -335,26 +347,17 @@ async def match_bulk(components: list[dict]) -> dict:
     Args:
         components: list of {purl|cpe, version, release?} objects.
     """
-    results = []
-    for c in components:
-        purl, cpe = c.get("purl") or "", c.get("cpe") or ""
-        # a generic purl carries no ecosystem and never matches → prefer the CPE then
-        ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
-        ver = c.get("version") or ""
-        try:
-            res = await match_check(hasura, ident, ver, c.get("release") or None)
-            cves = res["cves"]
-            results.append({"component": ident, "version": ver,
-                            "status": "vulnerable" if cves else "compliant",
-                            "count": len(cves), "cves": cves})
-        except Exception as e:
-            results.append({"component": ident, "version": ver, "status": "unknown", "error": str(e)})
+    res = await api.match(components)
     return {
-        "total": len(results),
-        "vulnerable": sum(1 for r in results if r["status"] == "vulnerable"),
-        "compliant": sum(1 for r in results if r["status"] == "compliant"),
-        "unknown": sum(1 for r in results if r["status"] == "unknown"),
-        "results": results,
+        "total": res["total"],
+        "vulnerable": res["vulnerable"],
+        "compliant": res["compliant"],
+        "unknown": res["unknown"],
+        "results": [
+            {"component": r["component"], "version": r["version"], "status": r["status"],
+             "count": len(r.get("cves") or []), "cves": _remap_cves(r.get("cves") or [])}
+            for r in res["results"]
+        ],
     }
 
 

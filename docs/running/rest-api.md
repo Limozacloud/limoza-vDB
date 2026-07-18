@@ -31,6 +31,7 @@ thousands of components is a single request. Matches include custom
 { "total": 3, "vulnerable": 2, "compliant": 1, "unknown": 0,
   "results": [
     { "component": "…", "version": "…", "status": "vulnerable",
+      "remediation": { "fixed": "3.0.21", "fix_kb": null, "cve": "CVE-2026-7383", "closes": 24, "unfixed": 0 },
       "cves": [ { "id": "CVE-…", "fixed": "…", "fix_kb": "KB5043050", "status": "fixed", "sources": ["microsoft"] } ] }
   ] }
 ```
@@ -39,6 +40,20 @@ Each component carries `purl` **or** `cpe`, a `version`, and (for OS packages) a
 to a real ecosystem purl or a cpe). `status` is `vulnerable` | `compliant` | `unknown` (the
 component couldn't be parsed/compared). For Microsoft CPE findings `fix_kb` carries the MSRC
 KB article (e.g. `KB5043050`); it is `null` for distro/ecosystem sources.
+
+`remediation` (present on vulnerable components) is the **single highest fix** that closes the
+component's fixable CVEs — "upgrade to X → done":
+
+| Field | Meaning |
+|-------|---------|
+| `fixed` | the version to upgrade to (the max fix across all the component's CVEs) |
+| `fix_kb` | the KB shipping it (Windows) or `null` |
+| `cve` | the CVE that demands this highest version |
+| `closes` | how many of the component's CVEs this upgrade closes |
+| `unfixed` | CVEs with **no** fix available — an upgrade can't close these (so "closes" never over-promises) |
+
+Example: a Windows host → `{ "fixed": "10.0.20348.5256", "fix_kb": "KB5094128", "closes": 2148, "unfixed": 0 }`
+("install KB5094128 → 2148 CVEs closed"). `null` on compliant components.
 
 ### `POST /lve` — role `lve_writer`
 Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)).

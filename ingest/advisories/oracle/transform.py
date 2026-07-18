@@ -2,7 +2,8 @@
 
 Each definition = one ELSA: metadata.title, references (elsa + CVEs),
 advisory.severity/issued, and advisory.cve elements carrying a cvss3 attribute
-of the form "<score>/<vector>". Per-package fix tests = phase-3 affected.
+of the form "<score>/<vector>". Per-package fix tests → affected, see
+`ingest/affected/sources/oracle.py`.
 """
 from ingest.core.cveid import normalize
 

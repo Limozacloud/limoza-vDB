@@ -198,13 +198,19 @@ def _match(args) -> int:
     if not findings:
         print("no vulnerable CVEs")
         return 0
+    from ingest.match import remediation
     print(f"{len(findings)} vulnerable CVE(s):")
     for cid in sorted(findings):
         hits = findings[cid]
-        fixed = next((f for _, _, f, _ in hits if f), None)
-        kb = next((k for _, _, _, k in hits if k), None)
-        srcs = ",".join(sorted({s for s, _, _, _ in hits}))
+        fixed = next((f for _, _, f, _, _ in hits if f), None)
+        kb = next((k for _, _, _, k, _ in hits if k), None)
+        srcs = ",".join(sorted({s for s, _, _, _, _ in hits}))
         print(f"  {cid}  fixed={fixed or '-'}{('  ' + kb) if kb else ''}  [{srcs}]")
+    rem = remediation(findings)
+    if rem and rem.get("fixed"):
+        print(f"→ remediation: upgrade to {rem['fixed']}"
+              f"{('  ' + rem['fix_kb']) if rem.get('fix_kb') else ''}"
+              f"  (closes {rem['closes']}, unfixed {rem['unfixed']})  [{rem['cve']}]")
     return 0
 
 

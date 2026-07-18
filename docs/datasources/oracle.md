@@ -49,7 +49,16 @@ Legend: ✅ imported  ✗ not imported
   10). Unlike AlmaLinux and Rocky, this source **does** carry per-CVE CVSS v3 data.
 - The advisory has only an `issued` date — no `modified`/updated date is present.
 - Oracle Linux's OVAL fix tests drive the [affected layer](../affected-versions.md)
-  (`coord=purl`), alongside the Red Hat ranges Oracle inherits.
+  (`coord=purl`), **alongside** the Red Hat ranges Oracle inherits — both come out of the
+  same `ingest/affected/sources/oracle.py` extractor (`status_source`: `own` for the OVAL
+  rows, `redhat-inherited` for the clone rows). This is what actually covers Oracle's own
+  UEK kernel (`kernel-uek*`) and anything else Oracle-specific that Red Hat has never heard
+  of — the Red Hat inheritance alone never matches those packages.
+- The fix-version criteria don't need resolving against the OVAL `<tests>`/`<objects>`/
+  `<states>` sections: each `<criterion comment="X is earlier than Y">` already carries the
+  package name and fix EVR directly in its human-readable comment, regardless of AND/OR
+  nesting (arch-specific branches just repeat the same pair) — a straight text match, no
+  cross-referencing.
 
 ---
 

@@ -132,10 +132,16 @@ def _file_rows(d: dict):
         "_inv":   set(raw.get("under_investigation") or []),
         "_fixed": set(raw.get("fixed") or []),
     }
+    # no_fix_planned is Red Hat's definitive "will not fix" call; a product can also carry a
+    # generic workaround/mitigation/none_available placeholder for the same CVE — no_fix_planned
+    # wins regardless of array order, since it's the more authoritative determination.
     rem_by_pid = {}
     for r in v.get("remediations") or []:
+        cat = r.get("category")
         for pid in r.get("product_ids") or []:
-            rem_by_pid.setdefault(pid, (r.get("category"), r.get("details")))
+            cur = rem_by_pid.get(pid)
+            if cur is None or (cat == "no_fix_planned" and cur[0] != "no_fix_planned"):
+                rem_by_pid[pid] = (cat, r.get("details"))
     flag_by_pid = {}
     for fl in v.get("flags") or []:
         for pid in fl.get("product_ids") or []:
