@@ -104,17 +104,21 @@ def _resolve(pid, cpe_by_id, purl_by_id, rel):
     return name, release, base, evr
 
 
-def _status_of(pid, ps, rem_by_pid, flag_by_pid):
+def _status_of(pid, ps, fixstate_by_pid, mitig_by_pid, flag_by_pid):
+    """→ (canonical status, status_raw, justification). status_raw is Red Hat's fix-state
+    wording (Affected / Fix deferred / Will not fix / Out of support scope) taken from the
+    no_fix_planned/none_available remediation; the workaround/mitigation prose goes to
+    justification, never into status_raw."""
     if pid in ps["_not"]:
-        return st.NOT_AFFECTED, st.CSAF_JUSTIFICATION.get(flag_by_pid.get(pid))
+        return st.NOT_AFFECTED, None, st.CSAF_JUSTIFICATION.get(flag_by_pid.get(pid))
     if pid in ps["_inv"]:
-        return st.UNDER_INVESTIGATION, None
+        return st.UNDER_INVESTIGATION, None, None
     if pid in ps["_fixed"]:
-        return st.FIXED, None
+        return st.FIXED, None, None
     if pid in ps["_aff"]:
-        cat, det = rem_by_pid.get(pid, (None, None))
-        return st.from_csaf_remediation(cat, det), det
-    return None, None
+        cat, det = fixstate_by_pid.get(pid, (None, None))
+        return st.from_csaf_remediation(cat, det), det, mitig_by_pid.get(pid)
+    return None, None, None
 
 
 def _file_rows(d: dict):
@@ -132,16 +136,21 @@ def _file_rows(d: dict):
         "_inv":   set(raw.get("under_investigation") or []),
         "_fixed": set(raw.get("fixed") or []),
     }
-    # no_fix_planned is Red Hat's definitive "will not fix" call; a product can also carry a
-    # generic workaround/mitigation/none_available placeholder for the same CVE — no_fix_planned
-    # wins regardless of array order, since it's the more authoritative determination.
-    rem_by_pid = {}
+    # Red Hat splits a product's remediations across categories. The FIX-STATE lives in
+    # no_fix_planned / none_available — a controlled code (Will not fix / Out of support scope /
+    # Fix deferred / Affected) that drives status + status_raw; no_fix_planned wins over
+    # none_available (more authoritative) regardless of array order. workaround / mitigation carry
+    # the how-to-mitigate PROSE, which belongs in justification, never in status_raw.
+    fixstate_by_pid, mitig_by_pid = {}, {}
     for r in v.get("remediations") or []:
-        cat = r.get("category")
+        cat, det = r.get("category"), r.get("details")
         for pid in r.get("product_ids") or []:
-            cur = rem_by_pid.get(pid)
-            if cur is None or (cat == "no_fix_planned" and cur[0] != "no_fix_planned"):
-                rem_by_pid[pid] = (cat, r.get("details"))
+            if cat in ("no_fix_planned", "none_available"):
+                cur = fixstate_by_pid.get(pid)
+                if cur is None or (cat == "no_fix_planned" and cur[0] != "no_fix_planned"):
+                    fixstate_by_pid[pid] = (cat, det)
+            elif cat in ("workaround", "mitigation"):
+                mitig_by_pid.setdefault(pid, det)
     flag_by_pid = {}
     for fl in v.get("flags") or []:
         for pid in fl.get("product_ids") or []:
@@ -151,7 +160,7 @@ def _file_rows(d: dict):
 
     seen = set()
     for pid in (ps["_aff"] | ps["_not"] | ps["_inv"] | ps["_fixed"]):
-        status, just = _status_of(pid, ps, rem_by_pid, flag_by_pid)
+        status, status_raw, just = _status_of(pid, ps, fixstate_by_pid, mitig_by_pid, flag_by_pid)
         if not status:
             continue
         name, release, base, evr = _resolve(pid, cpe_by_id, purl_by_id, rel)
@@ -162,11 +171,10 @@ def _file_rows(d: dict):
         if key in seen:
             continue
         seen.add(key)
-        raw_status = (rem_by_pid.get(pid, (None, None))[1]) if pid in ps["_aff"] else None
         yield row(
             cve_id=cid, coord="purl", ecosystem="rpm", package=name, purl=base,
             release=release, introduced="0", fixed=fixed, version_scheme="rpm",
-            status=status, status_raw=raw_status, justification=just,
+            status=status, status_raw=status_raw, justification=just,
             source=SOURCE, status_source="own", origin=ORIGIN,
         )
 
