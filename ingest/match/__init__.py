@@ -29,6 +29,11 @@ SCHEME = {
 # "unimportant"/"end-of-life", …): the finding stays in the DB with its justification so it's
 # auditable via GraphQL, but it doesn't count as an actionable vulnerability in /match.
 _SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
+# Raw vendor fix-states that are deprioritised the same way wont_fix is: the row stays in the DB
+# (canonical status = affected, auditable via GraphQL) but is NOT flagged in /match. Red Hat's
+# "Fix deferred" means the fix is postponed indefinitely — treated like Debian no-dsa / Ubuntu
+# "deferred", which already map to wont_fix. Matched against affected.status_raw (Red Hat/clones).
+_SKIP_RAW = {"Fix deferred"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
 
 # Ubuntu's "-signed" kernel packages (secure-boot signature wrapper around a flavor's real
@@ -312,7 +317,7 @@ def match(conn, purl, version=None, release=None, curations=None):
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
-            "version_scheme, status FROM affected "
+            "version_scheme, status, status_raw FROM affected "
             "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
         sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
@@ -325,7 +330,9 @@ def match(conn, purl, version=None, release=None, curations=None):
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        for cid, src, rel_row, intro, fixed, last, scheme, status in cur.fetchall():
+        for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in cur.fetchall():
+            if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
+                continue
             ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
                                 "release": rel_row, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
