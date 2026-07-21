@@ -126,7 +126,8 @@ def parse_purl(purl):
     parts = body.split("/")
     quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
     ptype = parts[0]
-    # rpm/deb: bare package name (namespace=redhat/ubuntu dropped, like affected.package);
+    namespace = parts[1] if len(parts) > 2 else None   # rpm/deb vendor (redhat/oracle/ubuntu/…)
+    # rpm/deb: bare package name (namespace kept separately — it is the vendor, e.g. redhat);
     # maven: group:artifact (purl uses "/", but GHSA/OSV store the ":" form);
     # other ecosystems: name as-is (django, @scope/x, …)
     if ptype in ("rpm", "deb"):
@@ -141,7 +142,7 @@ def parse_purl(purl):
         name = ":".join(parts[1:])
     else:
         name = "/".join(parts[1:])
-    return ptype, name, version or None, quals
+    return ptype, name, version or None, quals, namespace
 
 
 _EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
@@ -150,6 +151,31 @@ _EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
 _RPM_DISTRO = re.compile(
     r"^(?:rhel|redhat|centos|rocky(?:linux)?|alma(?:linux)?|oracle(?:linux)?|ol)[-_ ]?(\d+)(?:[.](\d+))?$",
     re.I)
+
+# Vendor of an rpm host → which affected `source`s to trust. The elN dist-tag is SHARED across the
+# whole RHEL family (redhat/oracle/alma/rocky all tag el8_6), so the release stream alone cannot
+# separate vendors: an Oracle ksplice fix (epoch 2) would otherwise leak into a Red Hat result and
+# even become its remediation target. Scope the match to the host's own vendor + Red Hat as the
+# authoritative rebuild baseline for the clones (whose own feeds can lag). CentOS has no feed of its
+# own — it IS a RHEL rebuild — so it maps to Red Hat. `oracle` is NEVER pulled into a non-Oracle
+# match (that is exactly where the ksplice noise lives). Unknown vendor → None → no source filter →
+# the whole-family pool (unchanged legacy behaviour: best-effort coverage when no vendor is given).
+_RPM_VENDOR = re.compile(r"^(rhel|redhat|centos|rocky|alma|oracle|ol)(?:linux)?(?:[-_. ]?\d.*)?$", re.I)
+_VENDOR_SOURCES = {
+    "rhel": ["redhat"], "redhat": ["redhat"], "centos": ["redhat"],
+    "oracle": ["oracle", "redhat"], "ol": ["oracle", "redhat"],
+    "alma": ["almalinux", "redhat"], "rocky": ["rocky", "redhat"],
+}
+
+
+def _rpm_sources(distro, namespace):
+    """RHEL-family vendor → affected `source`s to match, or None (unknown → whole-family pool).
+    `distro` (the distro= qualifier / release) wins; the purl namespace is the fallback."""
+    for cand in (distro, namespace):
+        m = _RPM_VENDOR.match(cand or "")
+        if m:
+            return _VENDOR_SOURCES[m.group(1).lower()]
+    return None
 
 
 def _el_streams(major, minor):
@@ -275,18 +301,24 @@ def match(conn, purl, version=None, release=None, curations=None):
         curations = load_curations(conn)
     if purl.startswith("cpe:"):
         return match_cpe(conn, purl, version, curations)
-    ptype, name, pv, quals = parse_purl(purl)
+    ptype, name, pv, quals, namespace = parse_purl(purl)
     version = version or pv
     if not version:
         raise ValueError("no version (give pkg@version or a second arg)")
     if ptype == "rpm" and quals.get("epoch") and ":" not in version:
         version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
+    # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
+    # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
+    sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status FROM affected "
             "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
         sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
+        if sources is not None:                     # scope to the host's vendor (+ RH baseline)
+            sql += " AND source = ANY(%s)"
+            params = params + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
         sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
         params = (eco, name, rel, rel)

@@ -76,7 +76,7 @@ def _bulk_match(components: list) -> list:
             ver = c.get("version") or ""
             rel = c.get("release") or None
             if ident.startswith("pkg:rpm/") or ident.startswith("pkg:deb/"):
-                _, name, _, quals = parse_purl(ident)
+                _, name, _, quals, _ = parse_purl(ident)
                 # an installed-but-not-running kernel build (active=false, rpm or deb) — the
                 # active main package already carries these CVEs.
                 if quals.get("active") == "false":
@@ -169,7 +169,7 @@ def _create_lve(d: dict) -> dict:
             raise ValueError("invalid cpe 2.3 string")
         ident = {"coord": "cpe", "cpe23": key}
     else:
-        ptype, name, _, quals = parse_purl(d["product"])
+        ptype, name, _, quals, _ = parse_purl(d["product"])
         if ptype == "generic":
             raise ValueError(
                 "generic purls are not allowed for LVEs — a generic purl never matches a scanned "
