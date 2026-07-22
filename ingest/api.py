@@ -5,8 +5,11 @@ for batch callers (a scanner / Windmill posting tens of thousands of components 
 No model is involved, so there is no token cost — just a DB lookup.
 
     GET  /healthz
-    POST /match   (any valid token)   { "components": [ {purl|cpe, version, release?}, … ] }
+    POST /match   (any valid token)   { "components": [ {purl|cpe, version, release?,
+                                         repository_version?}, … ] }
                                        → per component {status, cves} + summary. Deduped.
+                                       repository_version → per-CVE repo_fixable + repo_fixed_cves
+                                       (does the version in your repo close it? re-match & diff).
     POST /lve     (role lve_writer)    { "product", "title", "fixed"?, … } → create an LVE
                                        (a DB trigger materialises its affected row at once).
 
@@ -67,7 +70,7 @@ def _bulk_match(components: list) -> list:
     conn = get_conn()
     try:
         curations = load_curations(conn)          # load once, apply to every component
-        cache, results = {}, []
+        cache, repo_cache, results = {}, {}, []
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -108,7 +111,29 @@ def _bulk_match(components: list) -> list:
                                 "remediation": remediation(f), "cves": _fmt(f)}
                 except Exception as e:
                     cache[k] = {"status": "unknown", "cves": [], "error": str(e)}
-            results.append({"component": ident, "version": ver, **cache[k]})
+            entry = cache[k]
+            # repository_version: "would the version available in OUR repo close these CVEs?"
+            # Re-match with that version as the installed one — a CVE that drops out is one the repo
+            # version fixes (same comparator, vendor scoping, epoch, curations as the real match).
+            repo_ver = c.get("repository_version")
+            extra = {}
+            if repo_ver:
+                extra["repository_version"] = repo_ver
+                extra["repo_fixed_cves"] = []
+                if entry.get("cves"):
+                    rk = (ident, repo_ver, rel)
+                    if rk not in repo_cache:
+                        try:
+                            repo_cache[rk] = set(match(conn, ident, repo_ver, rel, curations))
+                        except Exception:
+                            repo_cache[rk] = None            # unparseable repo version → can't decide
+                    still_open = repo_cache[rk]
+                    if still_open is not None:
+                        fixedset = {cv["id"] for cv in entry["cves"] if cv["id"] not in still_open}
+                        entry = {**entry, "cves": [{**cv, "repo_fixable": cv["id"] in fixedset}
+                                                   for cv in entry["cves"]]}
+                        extra["repo_fixed_cves"] = sorted(fixedset)
+            results.append({"component": ident, "version": ver, **entry, **extra})
         return results
     finally:
         conn.close()
