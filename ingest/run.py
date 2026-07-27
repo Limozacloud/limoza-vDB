@@ -287,6 +287,67 @@ def _create_token(args) -> int:
     return 0
 
 
+# cve.composite: one JSONB field per CVE with the priority-resolved description/cvss/cwes plus the
+# single-source epss/kev/ssvc — so a consumer gets "the one value that matters" without walking the
+# multi-source arrays. __PRIO__ is replaced with the SOURCE_PRIORITY array at hasura-init time (env
+# driven — change the env + re-run `vdb hasura-init`, no re-ingest). cwes: highest-priority origin
+# that has REAL (catalog) CWEs; NVD placeholders (NVD-CWE-noinfo/-Other, not in the cwe table) drop
+# out via the INNER JOIN. cvss: newest version first, then source priority.
+_COMPOSITE_SQL = """
+CREATE OR REPLACE FUNCTION cve_composite(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+SELECT jsonb_build_object(
+  'description', (
+    SELECT jsonb_build_object('value', d.value, 'origin', d.origin, 'source', d.source)
+    FROM cve_desc d
+    WHERE d.cve_id = c.cve_id AND d.lang = 'en' AND coalesce(d.value,'') <> ''
+    ORDER BY array_position(__PRIO__, d.origin) NULLS LAST
+    LIMIT 1),
+  'cvss', (
+    SELECT jsonb_build_object('version', v.version, 'base_score', v.base_score,
+                              'severity', v.severity, 'vector', v.vector,
+                              'origin', v.origin, 'source', v.source)
+    FROM cve_cvss v
+    WHERE v.cve_id = c.cve_id
+    ORDER BY array_position(ARRAY['4.0','3.1','3.0','2.0']::text[], v.version) NULLS LAST,
+             array_position(__PRIO__, v.origin) NULLS LAST
+    LIMIT 1),
+  'cwes', (
+    SELECT jsonb_agg(DISTINCT jsonb_build_object(
+             'cwe_id', cw.cwe_id, 'origin', cw.origin, 'source', cw.source,
+             'name', cat.name, 'abstraction', cat.abstraction,
+             'description', cat.description, 'extended_description', cat.extended_description,
+             'likelihood_of_exploit', cat.likelihood_of_exploit,
+             'common_consequences', cat.common_consequences,
+             'potential_mitigations', cat.potential_mitigations,
+             'modes_of_introduction', cat.modes_of_introduction,
+             'detection_methods', cat.detection_methods,
+             'related_attack_patterns', cat.related_attack_patterns,
+             'related_weaknesses', cat.related_weaknesses))
+    FROM cve_cwe cw
+    JOIN cwe cat ON cat.cwe_id = cw.cwe_id
+    WHERE cw.cve_id = c.cve_id
+      AND cw.origin = (
+          SELECT cw2.origin FROM cve_cwe cw2
+          JOIN cwe cat2 ON cat2.cwe_id = cw2.cwe_id
+          WHERE cw2.cve_id = c.cve_id
+          ORDER BY array_position(__PRIO__, cw2.origin) NULLS LAST
+          LIMIT 1)),
+  'epss', (SELECT jsonb_build_object('score', e.score, 'percentile', e.percentile, 'date', e.date)
+           FROM epss e WHERE e.cve_id = c.cve_id),
+  'kev',  (SELECT jsonb_build_object('date_added', k.date_added, 'due_date', k.due_date,
+                                     'known_ransomware', k.known_ransomware, 'required_action', k.required_action,
+                                     'vendor_project', k.vendor_project, 'product', k.product,
+                                     'vulnerability_name', k.vulnerability_name, 'short_description', k.short_description)
+           FROM kev k WHERE k.cve_id = c.cve_id),
+  'ssvc', (SELECT jsonb_build_object('exploitation', s.exploitation, 'automatable', s.automatable,
+                                     'technical_impact', s.technical_impact)
+           FROM ssvc s WHERE s.cve_id = c.cve_id)
+);
+$fn$;
+"""
+
+
 def _hasura_init() -> int:
     """Track all V2 tables in Hasura + wire CVE-spine relationships (manual, no FKs)
     + grant select to anonymous/readonly + reload. Idempotent."""
@@ -360,12 +421,37 @@ def _hasura_init() -> int:
             "table": {"schema": "public", "name": "cve_cwe"}, "name": "cwe",
             "using": manual("cwe", {"cwe_id": "cwe_id"})}})
 
+    print("Composite computed field (cve.composite)...")
+    prio = [s.strip() for s in os.environ.get(
+        "SOURCE_PRIORITY", "nvd,cvelistv5,redhat,suse,ubuntu,debian,ghsa,microsoft").split(",") if s.strip()]
+    prio_arr = "ARRAY[" + ",".join("'" + s.replace("'", "''") + "'" for s in prio) + "]::text[]"
+    from ingest.core.db import get_conn
+    dbc = get_conn()
+    try:
+        with dbc.cursor() as cur:
+            cur.execute(_COMPOSITE_SQL.replace("__PRIO__", prio_arr))
+        dbc.commit()
+        print(f"  ✓ function cve_composite (priority: {','.join(prio)})")
+    except Exception as e:
+        print(f"  ✗ function cve_composite: {e}")
+    finally:
+        dbc.close()
+    attempt("cve.composite [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "composite",
+            "definition": {"function": {"schema": "public", "name": "cve_composite"}}}})
+
     print("Permissions (select)...")
     for role in ("readonly", "lve_writer", "curation_writer"):   # writers = readonly + own insert
         for t in ALL:
+            perm = {"columns": "*", "filter": {}, "allow_aggregations": True}
+            if t == "cve":                          # expose the composite computed field to the role
+                perm["computed_fields"] = ["composite"]
+                # drop+recreate so an existing permission picks up computed_fields (create alone is a
+                # no-op when the permission already exists); harmless "not exists" on a fresh DB.
+                attempt(f"cve drop [{role}]", {"type": "pg_drop_select_permission", "args": {
+                        "source": "default", "table": {"schema": "public", "name": "cve"}, "role": role}})
             attempt(f"{t} [{role}]", {"type": "pg_create_select_permission", "args": {"source": "default",
-                    "table": {"schema": "public", "name": t}, "role": role,
-                    "permission": {"columns": "*", "filter": {}, "allow_aggregations": True}}})
+                    "table": {"schema": "public", "name": t}, "role": role, "permission": perm}})
 
     print("Permission (lve_writer insert on lve)...")
     attempt("lve [lve_writer insert]", {"type": "pg_create_insert_permission", "args": {"source": "default",
