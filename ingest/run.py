@@ -347,6 +347,33 @@ SELECT jsonb_build_object(
 $fn$;
 """
 
+# cve.history: a VIRTUAL timeline assembled from the timestamps we already store (there is no stored
+# change-log). It shows WHEN things happened (reserved/published/updated, first ingested by us, last
+# synced, added to CISA KEV + due date, and each linked advisory's published/modified) — not WHAT a
+# value changed to. Sorted ascending; epss.date is intentionally excluded (daily → noise).
+_HISTORY_SQL = """
+CREATE OR REPLACE FUNCTION cve_history(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+  WITH ev AS (
+    SELECT c.first_seen AS ts, 'first_seen' AS event, 'vdb' AS source, NULL::text AS ref
+    UNION ALL SELECT r.date_reserved,  'cve_reserved',  'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.date_published, 'cve_published', 'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.date_updated,   'cve_updated',   'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.synced_at,      'record_synced', 'vdb', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT k.date_added::timestamptz, 'kev_added', 'cisa', NULL FROM kev k WHERE k.cve_id = c.cve_id
+    UNION ALL SELECT k.due_date::timestamptz,   'kev_due',   'cisa', NULL FROM kev k WHERE k.cve_id = c.cve_id
+    UNION ALL SELECT a.published, 'advisory_published', a.source, a.advisory_id
+        FROM advisory_cve ac JOIN advisory a ON a.source = ac.source AND a.advisory_id = ac.advisory_id
+        WHERE ac.cve_id = c.cve_id
+    UNION ALL SELECT a.modified, 'advisory_updated', a.source, a.advisory_id
+        FROM advisory_cve ac JOIN advisory a ON a.source = ac.source AND a.advisory_id = ac.advisory_id
+        WHERE ac.cve_id = c.cve_id
+  )
+  SELECT jsonb_agg(jsonb_build_object('date', ts, 'event', event, 'source', source, 'ref', ref) ORDER BY ts)
+  FROM ev WHERE ts IS NOT NULL;
+$fn$;
+"""
+
 
 def _hasura_init() -> int:
     """Track all V2 tables in Hasura + wire CVE-spine relationships (manual, no FKs)
@@ -421,7 +448,7 @@ def _hasura_init() -> int:
             "table": {"schema": "public", "name": "cve_cwe"}, "name": "cwe",
             "using": manual("cwe", {"cwe_id": "cwe_id"})}})
 
-    print("Composite computed field (cve.composite)...")
+    print("Computed fields (cve.composite + cve.history)...")
     prio = [s.strip() for s in os.environ.get(
         "SOURCE_PRIORITY", "nvd,cvelistv5,redhat,suse,ubuntu,debian,ghsa,microsoft").split(",") if s.strip()]
     prio_arr = "ARRAY[" + ",".join("'" + s.replace("'", "''") + "'" for s in prio) + "]::text[]"
@@ -430,22 +457,26 @@ def _hasura_init() -> int:
     try:
         with dbc.cursor() as cur:
             cur.execute(_COMPOSITE_SQL.replace("__PRIO__", prio_arr))
+            cur.execute(_HISTORY_SQL)
         dbc.commit()
-        print(f"  ✓ function cve_composite (priority: {','.join(prio)})")
+        print(f"  ✓ cve_composite (priority: {','.join(prio)}) + cve_history")
     except Exception as e:
-        print(f"  ✗ function cve_composite: {e}")
+        print(f"  ✗ composite/history function: {e}")
     finally:
         dbc.close()
     attempt("cve.composite [computed field]", {"type": "pg_add_computed_field", "args": {
             "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "composite",
             "definition": {"function": {"schema": "public", "name": "cve_composite"}}}})
+    attempt("cve.history [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "history",
+            "definition": {"function": {"schema": "public", "name": "cve_history"}}}})
 
     print("Permissions (select)...")
     for role in ("readonly", "lve_writer", "curation_writer"):   # writers = readonly + own insert
         for t in ALL:
             perm = {"columns": "*", "filter": {}, "allow_aggregations": True}
-            if t == "cve":                          # expose the composite computed field to the role
-                perm["computed_fields"] = ["composite"]
+            if t == "cve":                          # expose the composite + history computed fields
+                perm["computed_fields"] = ["composite", "history"]
                 # drop+recreate so an existing permission picks up computed_fields (create alone is a
                 # no-op when the permission already exists); harmless "not exists" on a fresh DB.
                 attempt(f"cve drop [{role}]", {"type": "pg_drop_select_permission", "args": {
