@@ -626,3 +626,13 @@ LANGUAGE sql STABLE AS $fn$
   SELECT jsonb_agg(jsonb_build_object('date', ts, 'event', event, 'source', source, 'ref', ref) ORDER BY ts)
   FROM ev WHERE ts IS NOT NULL;
 $fn$;
+
+-- cve_history_short(cve): the same timeline WITHOUT the advisory_* events — for heavily-advisoried
+-- CVEs (Log4Shell has dozens) this keeps just the core milestones. Filters cve_history, so the
+-- event list stays defined in one place.
+CREATE OR REPLACE FUNCTION cve_history_short(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+  SELECT jsonb_agg(e ORDER BY e->>'date')
+  FROM jsonb_array_elements(coalesce(cve_history(c), '[]'::jsonb)) e
+  WHERE e->>'event' NOT IN ('advisory_published', 'advisory_updated');
+$fn$;

@@ -386,13 +386,16 @@ def _hasura_init() -> int:
     attempt("cve.history [computed field]", {"type": "pg_add_computed_field", "args": {
             "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "history",
             "definition": {"function": {"schema": "public", "name": "cve_history"}}}})
+    attempt("cve.history_short [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "history_short",
+            "definition": {"function": {"schema": "public", "name": "cve_history_short"}}}})
 
     print("Permissions (select)...")
     for role in ("readonly", "lve_writer", "curation_writer"):   # writers = readonly + own insert
         for t in ALL:
             perm = {"columns": "*", "filter": {}, "allow_aggregations": True}
             if t == "cve":                          # expose the composite + history computed fields
-                perm["computed_fields"] = ["composite", "history"]
+                perm["computed_fields"] = ["composite", "history", "history_short"]
                 # drop+recreate so an existing permission picks up computed_fields (create alone is a
                 # no-op when the permission already exists); harmless "not exists" on a fresh DB.
                 attempt(f"cve drop [{role}]", {"type": "pg_drop_select_permission", "args": {
