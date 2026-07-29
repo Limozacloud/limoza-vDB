@@ -17,16 +17,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-_CONF = Path(__file__).resolve().parents[3] / "config" / "github_repos.json"
-_API  = ("https://api.github.com/repos/{repo}/security-advisories"
-         "?per_page=100&state=published&sort=published&page={page}")
+from ingest.advisories.github_repo import load_config
 
-
-def _load_repos():
-    if not _CONF.exists():
-        print(f"  github_repo: no config at {_CONF}")
-        return []
-    return [r for r in (json.loads(_CONF.read_text()).get("repos") or []) if isinstance(r, str)]
+_API = ("https://api.github.com/repos/{repo}/security-advisories"
+        "?per_page=100&state=published&sort=published&page={page}")
 
 
 def _fetch(repo: str, page: int, token: str | None):
@@ -42,7 +36,7 @@ def run(dirs: dict):
     dest = Path(dirs["github_repo"])
     dest.mkdir(parents=True, exist_ok=True)
     token = os.environ.get("GITHUB_TOKEN") or None
-    repos = _load_repos()
+    repos = [c["repo"] for c in load_config()]
     print(f"── sync github_repo ── ({len(repos)} repos, {'authed' if token else 'UNauthed 60/h'})")
     total = 0
     for repo in repos:

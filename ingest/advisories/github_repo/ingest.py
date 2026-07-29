@@ -12,6 +12,7 @@ from pathlib import Path
 from psycopg2.extras import Json
 
 from ingest.advisories import delete_scope, flush, new_bundle
+from ingest.advisories.github_repo import load_config
 from ingest.advisories.github_repo.transform import transform
 
 ORIGIN = SOURCE = "github_repo"
@@ -27,6 +28,7 @@ def run(conn, dirs: dict) -> int:
 
     delete_scope(conn, ORIGIN, SOURCE)
 
+    cpe_by_repo = {c["repo"]: c.get("cpe") for c in load_config()}
     seen_cvss, seen_cwe, seen_desc, seen_ref = set(), set(), set(), set()
     cve_pkgs = {}
     b = new_bundle()
@@ -39,7 +41,7 @@ def run(conn, dirs: dict) -> int:
             except Exception:
                 continue
             for raw in advs:
-                a = transform(raw, repo)
+                a = transform(raw, repo, cpe_by_repo.get(repo))
                 if not a:
                     continue
                 cid = a["cve"]

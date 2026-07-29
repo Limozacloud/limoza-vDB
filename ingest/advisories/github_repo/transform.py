@@ -54,7 +54,7 @@ def _ranges(vuln_range: str | None, patched: str | None) -> str | None:
     return " ".join(parts) or None
 
 
-def transform(a: dict, repo: str):
+def transform(a: dict, repo: str, cpe: str | None = None):
     if a.get("state") != "published" or a.get("withdrawn_at"):
         return None
     cid = normalize(a.get("cve_id") or "")
@@ -83,9 +83,9 @@ def transform(a: dict, repo: str):
             purl = f"pkg:{_PURL_TYPE.get(eco.lower(), eco.lower())}/{name}"
         else:                                         # non-ecosystem app → key on the repo itself
             purl = f"pkg:github/{repo}"
-        packages.append({"purl": purl, "ranges": rng})
+        packages.append({"purl": purl, "cpe": cpe, "ranges": rng})
     if not packages:                                  # still record the repo as the affected coord
-        packages.append({"purl": f"pkg:github/{repo}", "ranges": None})
+        packages.append({"purl": f"pkg:github/{repo}", "cpe": cpe, "ranges": None})
 
     return {
         "id":        a.get("ghsa_id"),
