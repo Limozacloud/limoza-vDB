@@ -192,6 +192,40 @@ def _derive_sql_tracks(rows: list) -> list:
     return extra
 
 
+def _collapse_cumulative(rows: list) -> list:
+    """Cumulative products (Edge, VS Code — ONE linear line) get the same CVE re-published across
+    monthly MSRC files with a HIGHER fix build (e.g. VS Code CVE-2026-41109 → 1.119.1 in May, then
+    1.128.1 in July). Both become fix tracks under the same `introduced`, and match_cpe only flags
+    when the host is below ALL of them — so a host between the old and new fix (1.121.0 ≥ 1.119.1)
+    is wrongly cleared by the stale build. Keep only the highest fix per line so the authoritative
+    (latest) build wins. _ROLLING_FULL → per (cve, cpe); _ROLLING_MAJOR → per (cve, cpe, major),
+    since different majors are genuinely separate ranges there. Non-cumulative products (Office
+    parallel lines) are untouched — their multiple fixes are real distinct tracks.
+    """
+    def _line_key(r):
+        prod = (r[_CPE_I] or "").split(":")[4] if r[_CPE_I] else ""
+        if prod in _ROLLING_FULL:
+            return (r[_CVE_I], r[_CPE_I])
+        if prod in _ROLLING_MAJOR:
+            return (r[_CVE_I], r[_CPE_I], r[_FIXED_I].split(".")[0])
+        return None                                    # non-cumulative → never collapsed
+
+    best = {}
+    for r in rows:
+        if not r[_FIXED_I]:
+            continue
+        k = _line_key(r)
+        if k and (k not in best or _build_key(r[_FIXED_I]) > _build_key(best[k])):
+            best[k] = r[_FIXED_I]
+    out = []
+    for r in rows:
+        k = _line_key(r) if r[_FIXED_I] else None
+        if k and r[_FIXED_I] != best[k]:               # drop the stale (non-max) fix on this line
+            continue
+        out.append(r)
+    return out
+
+
 def extract(conn, dirs):
     cpe_norm.load(conn)
     base = Path(dirs["microsoft"])
@@ -203,4 +237,5 @@ def extract(conn, dirs):
             continue
         rows.extend(_doc_rows(doc))
     rows.extend(_derive_sql_tracks(rows))     # add SQL GDR/CU sibling builds MSRC left out
+    rows = _collapse_cumulative(rows)         # Edge/VS Code: keep only the latest fix per line
     yield from rows
