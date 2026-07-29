@@ -102,6 +102,13 @@ def _doc_rows(doc: dict):
         cid = normalize(v.get("CVE") or "")
         if not cid:
             continue
+        # Edge products that already carry a REAL FixedBuild for THIS cve — never backfill those:
+        # a single MSRC file spans many Edge releases (149.x … 150.0.4078.99), so a CVE fixed in an
+        # earlier build must keep it. Only genuinely build-less Edge CVEs get the batch build.
+        edge_real = {pmap[pid] for r in (v.get("Remediations") or [])
+                     for pid in (r.get("ProductID") or [])
+                     if pmap.get(pid) and "edge_chromium" in pmap[pid]
+                     and _norm_build(r.get("FixedBuild"), "edge_chromium")}
         seen = set()
         for r in v.get("Remediations") or []:
             fb_raw = r.get("FixedBuild")
@@ -115,8 +122,8 @@ def _doc_rows(doc: dict):
                 if not cpe:
                     continue
                 fb = _norm_build(fb_raw, cpe.split(":")[4]) if fb_raw else None
-                if fb is None and "edge_chromium" in cpe:   # backfill Edge's cumulative release build
-                    fb = edge_fb.get(cpe)
+                if fb is None and "edge_chromium" in cpe and cpe not in edge_real:
+                    fb = edge_fb.get(cpe)    # only when this CVE has NO real Edge build at all
                 if fb is None:           # URL (C2R auto-update) / non-build & not backfillable → drop
                     continue
                 key = (cpe, fb)
@@ -203,12 +210,15 @@ def _collapse_cumulative(rows: list) -> list:
     parallel lines) are untouched — their multiple fixes are real distinct tracks.
     """
     def _line_key(r):
+        # Only _ROLLING_MAJOR (VS Code): MSRC re-publishes the same CVE across months with a higher
+        # build and the earlier one is superseded → keep the max within the major. Edge
+        # (_ROLLING_FULL) is NOT collapsed — one MSRC file lists many real Edge releases, each the
+        # true fix for its CVEs; collapsing would clobber a CVE's real (earlier) build with a later
+        # unrelated one and false-positive hosts in between.
         prod = (r[_CPE_I] or "").split(":")[4] if r[_CPE_I] else ""
-        if prod in _ROLLING_FULL:
-            return (r[_CVE_I], r[_CPE_I])
         if prod in _ROLLING_MAJOR:
             return (r[_CVE_I], r[_CPE_I], r[_FIXED_I].split(".")[0])
-        return None                                    # non-cumulative → never collapsed
+        return None                                    # Edge / non-cumulative → never collapsed
 
     best = {}
     for r in rows:
