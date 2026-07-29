@@ -63,6 +63,10 @@ def _norm_build(fb: str, product: str):
     return fb
 
 
+def _build_key(b: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else 0 for x in b.split("."))
+
+
 def _product_cpes(doc: dict) -> dict:
     """ProductID → NVD-validated canonical cpe23, for every CPE-matchable product."""
     out = {}
@@ -80,6 +84,20 @@ def _doc_rows(doc: dict):
     pmap = _product_cpes(doc)
     if not pmap:
         return
+    # Edge (Chromium) is cumulative, but MSRC sometimes leaves FixedBuild empty for some CVEs of an
+    # Edge batch even though they all ship in the same release — Microsoft only stamps a subset. The
+    # authoritative fix is that Edge release, so backfill the empty ones from the highest Edge build
+    # seen in this file. Scoped to edge_chromium (its own rolling scheme) so nothing else is affected.
+    edge_fb: dict = {}
+    for v in doc.get("Vulnerability") or []:
+        for r in v.get("Remediations") or []:
+            for pid in r.get("ProductID") or []:
+                cpe = pmap.get(pid)
+                if not cpe or "edge_chromium" not in cpe:
+                    continue
+                fb = _norm_build(r.get("FixedBuild"), cpe.split(":")[4])
+                if fb and (cpe not in edge_fb or _build_key(fb) > _build_key(edge_fb[cpe])):
+                    edge_fb[cpe] = fb
     for v in doc.get("Vulnerability") or []:
         cid = normalize(v.get("CVE") or "")
         if not cid:
@@ -87,8 +105,6 @@ def _doc_rows(doc: dict):
         seen = set()
         for r in v.get("Remediations") or []:
             fb_raw = r.get("FixedBuild")
-            if not fb_raw:
-                continue
             sub = r.get("SubType")
             # the remediation carries the KB article that ships this FixedBuild (Type 2 →
             # Description.Value = "5043050"); surface it so the matcher can name the fix.
@@ -98,8 +114,10 @@ def _doc_rows(doc: dict):
                 cpe = pmap.get(pid)
                 if not cpe:
                     continue
-                fb = _norm_build(fb_raw, cpe.split(":")[4])
-                if fb is None:           # URL (C2R auto-update) / non-build → not matchable, drop
+                fb = _norm_build(fb_raw, cpe.split(":")[4]) if fb_raw else None
+                if fb is None and "edge_chromium" in cpe:   # backfill Edge's cumulative release build
+                    fb = edge_fb.get(cpe)
+                if fb is None:           # URL (C2R auto-update) / non-build & not backfillable → drop
                     continue
                 key = (cpe, fb)
                 if key in seen:
