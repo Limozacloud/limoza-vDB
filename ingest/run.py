@@ -360,12 +360,48 @@ def _hasura_init() -> int:
             "table": {"schema": "public", "name": "cve_cwe"}, "name": "cwe",
             "using": manual("cwe", {"cwe_id": "cwe_id"})}})
 
+    print("Computed fields (cve.composite + cve.history)...")
+    # The functions themselves live in schema.sql (so the declarative `vdb schema`/pgschema keeps
+    # them). Here we only push the source priority from the env into the `vdb.source_priority` GUC
+    # that cve_composite() reads via vdb_source_priority(). ALTER DATABASE SET persists per-database
+    # for new connections; the function has a hardcoded fallback if the GUC is ever unset.
+    prio = ",".join(s.strip() for s in os.environ.get(
+        "SOURCE_PRIORITY", "nvd,cvelistv5,redhat,suse,ubuntu,debian,ghsa,microsoft").split(",") if s.strip())
+    db = os.environ.get("POSTGRES_DB", "")
+    from ingest.core.db import get_conn
+    dbc = get_conn()
+    dbc.autocommit = True                        # ALTER DATABASE cannot run inside a transaction block
+    try:
+        with dbc.cursor() as cur:
+            if db:
+                cur.execute(f'ALTER DATABASE "{db}" SET vdb.source_priority = %s', (prio,))
+        print(f"  ✓ source priority GUC: {prio}")
+    except Exception as e:
+        print(f"  ✗ set source priority GUC: {e}")
+    finally:
+        dbc.close()
+    attempt("cve.composite [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "composite",
+            "definition": {"function": {"schema": "public", "name": "cve_composite"}}}})
+    attempt("cve.history [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "history",
+            "definition": {"function": {"schema": "public", "name": "cve_history"}}}})
+    attempt("cve.history_short [computed field]", {"type": "pg_add_computed_field", "args": {
+            "source": "default", "table": {"schema": "public", "name": "cve"}, "name": "history_short",
+            "definition": {"function": {"schema": "public", "name": "cve_history_short"}}}})
+
     print("Permissions (select)...")
     for role in ("readonly", "lve_writer", "curation_writer"):   # writers = readonly + own insert
         for t in ALL:
+            perm = {"columns": "*", "filter": {}, "allow_aggregations": True}
+            if t == "cve":                          # expose the composite + history computed fields
+                perm["computed_fields"] = ["composite", "history", "history_short"]
+                # drop+recreate so an existing permission picks up computed_fields (create alone is a
+                # no-op when the permission already exists); harmless "not exists" on a fresh DB.
+                attempt(f"cve drop [{role}]", {"type": "pg_drop_select_permission", "args": {
+                        "source": "default", "table": {"schema": "public", "name": "cve"}, "role": role}})
             attempt(f"{t} [{role}]", {"type": "pg_create_select_permission", "args": {"source": "default",
-                    "table": {"schema": "public", "name": t}, "role": role,
-                    "permission": {"columns": "*", "filter": {}, "allow_aggregations": True}}})
+                    "table": {"schema": "public", "name": t}, "role": role, "permission": perm}})
 
     print("Permission (lve_writer insert on lve)...")
     attempt("lve [lve_writer insert]", {"type": "pg_create_insert_permission", "args": {"source": "default",

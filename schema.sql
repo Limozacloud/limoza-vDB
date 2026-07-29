@@ -534,3 +534,105 @@ LANGUAGE sql STABLE AS $fn$
     AND (s.cve_url IS NOT NULL OR v.data ? 'ref')
     AND NOT EXISTS (SELECT 1 FROM advisory_cve ac WHERE ac.cve_id=p_cve AND ac.source=v.source)
 $fn$;
+
+
+-- ── cve.composite / cve.history — Hasura computed fields (pg_add_computed_field in hasura-init) ──
+-- Declared HERE (not only in hasura-init) so the declarative schema apply (pgschema) keeps them —
+-- otherwise every `vdb schema` drops any object not in this file. The source priority for the
+-- resolved description/cvss/cwes comes from the `vdb.source_priority` GUC (set from the
+-- SOURCE_PRIORITY env at hasura-init) with a hardcoded fallback, so the function is static and
+-- always works even before the GUC is set.
+CREATE OR REPLACE FUNCTION vdb_source_priority() RETURNS text[]
+LANGUAGE sql STABLE AS $fn$
+  SELECT string_to_array(
+    coalesce(nullif(current_setting('vdb.source_priority', true), ''),
+             'nvd,cvelistv5,redhat,suse,ubuntu,debian,ghsa,microsoft'), ',');
+$fn$;
+
+-- cve_composite(cve): one JSONB with the priority-resolved description/cvss/cwes + single-source
+-- epss/kev/ssvc. cwes: highest-priority origin with REAL catalog CWEs (NVD placeholders drop via
+-- the inner join). cvss: newest version first, then source priority.
+CREATE OR REPLACE FUNCTION cve_composite(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+SELECT jsonb_build_object(
+  'description', (
+    SELECT jsonb_build_object('value', d.value, 'origin', d.origin, 'source', d.source)
+    FROM cve_desc d
+    WHERE d.cve_id = c.cve_id AND d.lang = 'en' AND coalesce(d.value,'') <> ''
+    ORDER BY array_position(vdb_source_priority(), d.origin) NULLS LAST
+    LIMIT 1),
+  'cvss', (
+    SELECT jsonb_build_object('version', v.version, 'base_score', v.base_score,
+                              'severity', v.severity, 'vector', v.vector,
+                              'origin', v.origin, 'source', v.source)
+    FROM cve_cvss v
+    WHERE v.cve_id = c.cve_id
+    ORDER BY array_position(ARRAY['4.0','3.1','3.0','2.0']::text[], v.version) NULLS LAST,
+             array_position(vdb_source_priority(), v.origin) NULLS LAST
+    LIMIT 1),
+  'cwes', (
+    SELECT jsonb_agg(DISTINCT jsonb_build_object(
+             'cwe_id', cw.cwe_id, 'origin', cw.origin, 'source', cw.source,
+             'name', cat.name, 'abstraction', cat.abstraction,
+             'description', cat.description, 'extended_description', cat.extended_description,
+             'likelihood_of_exploit', cat.likelihood_of_exploit,
+             'common_consequences', cat.common_consequences,
+             'potential_mitigations', cat.potential_mitigations,
+             'modes_of_introduction', cat.modes_of_introduction,
+             'detection_methods', cat.detection_methods,
+             'related_attack_patterns', cat.related_attack_patterns,
+             'related_weaknesses', cat.related_weaknesses))
+    FROM cve_cwe cw
+    JOIN cwe cat ON cat.cwe_id = cw.cwe_id
+    WHERE cw.cve_id = c.cve_id
+      AND cw.origin = (
+          SELECT cw2.origin FROM cve_cwe cw2
+          JOIN cwe cat2 ON cat2.cwe_id = cw2.cwe_id
+          WHERE cw2.cve_id = c.cve_id
+          ORDER BY array_position(vdb_source_priority(), cw2.origin) NULLS LAST
+          LIMIT 1)),
+  'epss', (SELECT jsonb_build_object('score', e.score, 'percentile', e.percentile, 'date', e.date)
+           FROM epss e WHERE e.cve_id = c.cve_id),
+  'kev',  (SELECT jsonb_build_object('date_added', k.date_added, 'due_date', k.due_date,
+                                     'known_ransomware', k.known_ransomware, 'required_action', k.required_action,
+                                     'vendor_project', k.vendor_project, 'product', k.product,
+                                     'vulnerability_name', k.vulnerability_name, 'short_description', k.short_description)
+           FROM kev k WHERE k.cve_id = c.cve_id),
+  'ssvc', (SELECT jsonb_build_object('exploitation', s.exploitation, 'automatable', s.automatable,
+                                     'technical_impact', s.technical_impact)
+           FROM ssvc s WHERE s.cve_id = c.cve_id)
+);
+$fn$;
+
+-- cve_history(cve): a virtual timeline from the timestamps we already store (no stored change-log).
+-- Shows WHEN things happened, not WHAT a value changed to. epss.date excluded (daily → noise).
+CREATE OR REPLACE FUNCTION cve_history(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+  WITH ev AS (
+    SELECT c.first_seen AS ts, 'first_seen' AS event, 'vdb' AS source, NULL::text AS ref
+    UNION ALL SELECT r.date_reserved,  'cve_reserved',  'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.date_published, 'cve_published', 'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.date_updated,   'cve_updated',   'cve', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT r.synced_at,      'record_synced', 'vdb', NULL FROM cve_record r WHERE r.cve_id = c.cve_id
+    UNION ALL SELECT k.date_added::timestamptz, 'kev_added', 'cisa', NULL FROM kev k WHERE k.cve_id = c.cve_id
+    UNION ALL SELECT k.due_date::timestamptz,   'kev_due',   'cisa', NULL FROM kev k WHERE k.cve_id = c.cve_id
+    UNION ALL SELECT a.published, 'advisory_published', a.source, a.advisory_id
+        FROM advisory_cve ac JOIN advisory a ON a.source = ac.source AND a.advisory_id = ac.advisory_id
+        WHERE ac.cve_id = c.cve_id
+    UNION ALL SELECT a.modified, 'advisory_updated', a.source, a.advisory_id
+        FROM advisory_cve ac JOIN advisory a ON a.source = ac.source AND a.advisory_id = ac.advisory_id
+        WHERE ac.cve_id = c.cve_id
+  )
+  SELECT jsonb_agg(jsonb_build_object('date', ts, 'event', event, 'source', source, 'ref', ref) ORDER BY ts)
+  FROM ev WHERE ts IS NOT NULL;
+$fn$;
+
+-- cve_history_short(cve): the same timeline WITHOUT the advisory_* events — for heavily-advisoried
+-- CVEs (Log4Shell has dozens) this keeps just the core milestones. Filters cve_history, so the
+-- event list stays defined in one place.
+CREATE OR REPLACE FUNCTION cve_history_short(c cve) RETURNS jsonb
+LANGUAGE sql STABLE AS $fn$
+  SELECT jsonb_agg(e ORDER BY e->>'date')
+  FROM jsonb_array_elements(coalesce(cve_history(c), '[]'::jsonb)) e
+  WHERE e->>'event' NOT IN ('advisory_published', 'advisory_updated');
+$fn$;
