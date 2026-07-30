@@ -313,20 +313,32 @@ def match(conn, purl, version=None, release=None, curations=None):
     if ptype == "rpm" and quals.get("epoch") and ":" not in version:
         version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
+    # rpm/deb: `name` resolved to the SOURCE package (the `upstream` qualifier wins) because most
+    # vendor advisories are source-keyed. But OVAL tests each BINARY rpm, so the per-package fix
+    # build is frequently keyed under the binary name (vim-common → fixed 2:8.2.2637-26.el9_8.10)
+    # while the source name (vim) carries only a version-less "affected" row — a source-only lookup
+    # then returns the CVE but no fix version. Look up BOTH names so the binary-keyed fix is not
+    # lost. (Source-keyed advisories still match via the source name; a source that is itself a
+    # binary — glibc, openssl — already coincided, which is why those "happened to work".)
+    pkgs = [name.lower()]
+    if ptype in ("rpm", "deb"):
+        binary = purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
+        if binary and binary not in pkgs:
+            pkgs.append(binary)
     # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status, status_raw FROM affected "
-            "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
+            "WHERE ecosystem = %s AND lower(package) = ANY(%s) ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
-        sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
+        sql, params = base + "AND release = ANY(%s)", (eco, pkgs, rel)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
             sql += " AND source = ANY(%s)"
             params = params + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
         sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
-        params = (eco, name, rel, rel)
+        params = (eco, pkgs, rel, rel)
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
