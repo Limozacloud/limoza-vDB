@@ -192,15 +192,22 @@ def _el_streams(major, minor):
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative; an explicit
-    release / `distro=` (el9, redhat-9.3, centos-9, rocky-9, …) is the fallback when the version
-    carries no tag."""
+    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative for the major;
+    when it carries no minor (a bare `.el8` — common for BaseOS/AppStream base packages Red Hat does
+    not rebuild per minor, e.g. postfix 3.5.8-7.el8) borrow the minor from the `distro=`/release
+    (redhat-8.10 → 10) so the host still inherits every minor-stream fix up to its release; otherwise
+    a bare-tag host resolves to just [elN] and misses el N_M fixes (false negative). The release is
+    also the full fallback when the version carries no tag at all."""
+    rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
+    rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        return _el_streams(major, minor if minor.isdigit() else None)
-    m = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
-    return _el_streams(m.group(1), m.group(2)) if m else None
+        minor = minor if minor.isdigit() else None
+        if minor is None and rmaj == major and rmin:   # bare .elN → take the minor from distro=
+            minor = rmin
+        return _el_streams(major, minor)
+    return _el_streams(rmaj, rmin) if rmaj else None
 
 
 def _lane(ptype, version, quals, release=None):
@@ -313,20 +320,32 @@ def match(conn, purl, version=None, release=None, curations=None):
     if ptype == "rpm" and quals.get("epoch") and ":" not in version:
         version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
+    # rpm/deb: `name` resolved to the SOURCE package (the `upstream` qualifier wins) because most
+    # vendor advisories are source-keyed. But OVAL tests each BINARY rpm, so the per-package fix
+    # build is frequently keyed under the binary name (vim-common → fixed 2:8.2.2637-26.el9_8.10)
+    # while the source name (vim) carries only a version-less "affected" row — a source-only lookup
+    # then returns the CVE but no fix version. Look up BOTH names so the binary-keyed fix is not
+    # lost. (Source-keyed advisories still match via the source name; a source that is itself a
+    # binary — glibc, openssl — already coincided, which is why those "happened to work".)
+    pkgs = [name.lower()]
+    if ptype in ("rpm", "deb"):
+        binary = purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
+        if binary and binary not in pkgs:
+            pkgs.append(binary)
     # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status, status_raw FROM affected "
-            "WHERE ecosystem = %s AND lower(package) = lower(%s) ")
+            "WHERE ecosystem = %s AND lower(package) = ANY(%s) ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
-        sql, params = base + "AND release = ANY(%s)", (eco, name, rel)
+        sql, params = base + "AND release = ANY(%s)", (eco, pkgs, rel)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
             sql += " AND source = ANY(%s)"
             params = params + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
         sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
-        params = (eco, name, rel, rel)
+        params = (eco, pkgs, rel, rel)
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
