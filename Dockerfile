@@ -15,6 +15,7 @@ RUN useradd -u 1000 -m ingest && mkdir -p /data
 WORKDIR /app
 COPY schema.sql .
 COPY ingest/ ./ingest/
+COPY config/ ./config/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && chown -R ingest:ingest /app \
     && printf '#!/bin/sh\nexec gosu ingest python -m ingest.run "$@"\n' > /usr/local/bin/vdb \

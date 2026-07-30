@@ -1,0 +1,6 @@
+{
+  "_comment": "Repos whose per-repository GitHub Security Advisories we ingest (github_repo source). For non-ecosystem software (desktop apps, firmware, standalone binaries) whose advisories never reach the global GHSA feed. Package software does NOT belong here — it comes in via the `ghsa` source. Each entry is either \"owner/repo\" or {\"repo\": \"owner/repo\", \"cpe\": \"cpe:2.3:a:vendor:product\"}. The optional CPE (canonical CPE 2.3, special chars escaped) lets a scanner that reports the app by CPE actually match.",
+  "repos": [
+    { "repo": "notepad-plus-plus/notepad-plus-plus", "cpe": "cpe:2.3:a:notepad-plus-plus:notepad\\+\\+" }
+  ]
+}

@@ -18,6 +18,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # per-repo GitHub security-advisory ingest (source github_repo). 5000 req/h vs 60/h unauth.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       - epss:/data/epss
       - kev:/data/kev
@@ -36,6 +38,7 @@ services:
       - rocky:/data/rocky
       - microsoft:/data/microsoft
       - ghsa:/data/ghsa
+      - github_repo:/data/github_repo
       - osv:/data/osv
       - nodejs:/data/nodejs
       - exploitdb:/data/exploitdb
@@ -139,6 +142,7 @@ volumes:
   rocky: {}
   microsoft: {}
   ghsa: {}
+  github_repo: {}
   osv: {}
   nodejs: {}
   exploitdb: {}

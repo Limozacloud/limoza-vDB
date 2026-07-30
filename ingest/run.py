@@ -41,6 +41,7 @@ SOURCES = {
     "rocky":      ("ingest.advisories.rocky",    "advisory", "rocky"),
     "microsoft":  ("ingest.advisories.microsoft","advisory", "microsoft"),
     "ghsa":       ("ingest.advisories.ghsa",     "advisory", "ghsa"),
+    "github_repo":("ingest.advisories.github_repo","advisory", "github_repo"),
     "osv":        ("ingest.advisories.osv",      "advisory", None),
     "nodejs":     ("ingest.advisories.nodejs",   "cve_vendor", "nodejs"),
     "exploitdb":  ("ingest.exploits.exploitdb",  "exploits", "exploitdb"),
