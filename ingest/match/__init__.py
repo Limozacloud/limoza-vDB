@@ -192,15 +192,22 @@ def _el_streams(major, minor):
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative; an explicit
-    release / `distro=` (el9, redhat-9.3, centos-9, rocky-9, …) is the fallback when the version
-    carries no tag."""
+    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative for the major;
+    when it carries no minor (a bare `.el8` — common for BaseOS/AppStream base packages Red Hat does
+    not rebuild per minor, e.g. postfix 3.5.8-7.el8) borrow the minor from the `distro=`/release
+    (redhat-8.10 → 10) so the host still inherits every minor-stream fix up to its release; otherwise
+    a bare-tag host resolves to just [elN] and misses el N_M fixes (false negative). The release is
+    also the full fallback when the version carries no tag at all."""
+    rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
+    rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        return _el_streams(major, minor if minor.isdigit() else None)
-    m = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
-    return _el_streams(m.group(1), m.group(2)) if m else None
+        minor = minor if minor.isdigit() else None
+        if minor is None and rmaj == major and rmin:   # bare .elN → take the minor from distro=
+            minor = rmin
+        return _el_streams(major, minor)
+    return _el_streams(rmaj, rmin) if rmaj else None
 
 
 def _lane(ptype, version, quals, release=None):
