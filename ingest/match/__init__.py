@@ -254,13 +254,28 @@ _VARIANT_TAGS = (
     "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
 )
 
+# Layered products & special kernels carry a dist tag of the form elN<letters>: el9ap (Ansible
+# Automation Platform), el8eap/el9eap (JBoss EAP), el9uek/el10uek (Oracle UEK kernel), el7ost/el8ost
+# (OpenStack), el7sat/el8sat (Satellite), el9cp/el8cp (OpenShift), el8jbcs/el8jws (JBoss) … — each a
+# separate line that ships its OWN, often much newer build (python3-requests 2.32.2-1.el9ap vs the
+# base 2.25.1-9.el9). A base build is ONLY ever elN or elN_M, so a letter right after the digits is
+# never the base line (nor a hex hash — `l` isn't hex); such a fix is comparable only to a host that
+# itself carries the tag. The tag rides in the installed EVR, so a host genuinely on the product
+# matches its own fixes, while a base host skips them.
+_LAYERED_RE = re.compile(r"el\d+[a-z]+")
+
 
 def _variant(evr):
-    """The parallel product line an rpm EVR belongs to (see :data:`_VARIANT_TAGS`), or None for a
-    regular build. A fix is only comparable to a host of the same variant; the marker rides in the
-    version string, so both the host version and the stored `fixed` carry it."""
+    """The parallel product line an rpm EVR belongs to (a :data:`_VARIANT_TAGS` marker or a layered
+    elN<letters> dist tag), or None for a regular build. A fix is only comparable to a host of the
+    same variant; the marker rides in the version string, so host version and stored `fixed` carry
+    it."""
     r = (evr or "").lower()
-    return next((t for t in _VARIANT_TAGS if t in r), None)
+    tag = next((t for t in _VARIANT_TAGS if t in r), None)
+    if tag:
+        return tag
+    m = _LAYERED_RE.search(r)
+    return m.group(0) if m else None
 
 
 def _lane(ptype, version, quals, release=None):
