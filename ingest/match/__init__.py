@@ -184,11 +184,17 @@ def _rpm_sources(distro, namespace):
 
 
 def _el_streams(major, minor):
-    """el9_3 → [el9, el9_0, … el9_3]. Red Hat keys affected/won't-fix at the major stream and
-    fixes at the specific minor; a host on 9.3 inherits every fix from 9.0–9.3."""
+    """The RHEL streams a host on elN_M is actually served by: its OWN minor (elN_M) plus the base
+    major stream (elN — where Red Hat keys the major-stream/OVAL fix and the affected/won't-fix
+    statements). OTHER minors are EUS backport lines with independent release numbering (libxslt
+    1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10) that a host on a different minor never runs; including them
+    makes the host look "below" a foreign line's higher-sorting build → false positives and a wrong
+    remediation target. A fix the host inherited from an EARLIER minor is already rolled into its own
+    higher build (so no true positive is lost by dropping it), and a fix that landed in a LATER minor
+    is carried by the base/OVAL major (elN) row — so (elN, elN_M) is the correct, complete scope."""
     if minor is None:
         return [f"el{major}"]
-    return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+    return [f"el{major}", f"el{major}_{minor}"]
 
 
 def _rpm_streams(version, rel):
@@ -208,6 +214,21 @@ def _rpm_streams(version, rel):
             minor = rmin
         return _el_streams(major, minor)
     return _el_streams(rmaj, rmin) if rmaj else None
+
+
+def _variant(evr):
+    """Parallel build variant of an rpm EVR — a separate product line that shares the package name
+    but that a host is never simultaneously on. FIPS (`_fips`) and Oracle ksplice (`.ksplice`) tag the
+    release and are numbered to sort ABOVE the regular build, so a regular host looks "below" such a
+    fix and is falsely flagged (and it becomes the wrong remediation). Returns the variant tag, or None
+    for a regular build; a fix is only comparable to a host of the same variant. The marker rides in
+    the version string itself, so both sides (host version and stored `fixed`) carry it."""
+    r = (evr or "").lower()
+    if "_fips" in r:
+        return "fips"
+    if "ksplice" in r:
+        return "ksplice"
+    return None
 
 
 def _lane(ptype, version, quals, release=None):
@@ -346,12 +367,15 @@ def match(conn, purl, version=None, release=None, curations=None):
     else:                                           # deb / ecosystem → exact release or NULL
         sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
         params = (eco, pkgs, rel, rel)
+    host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
         for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in cur.fetchall():
             if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
                 continue
+            if (rv := _variant(fixed)) is not None and rv != host_var:
+                continue                     # foreign parallel line (fips/ksplice) — never the host's
             ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
                                 "release": rel_row, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
