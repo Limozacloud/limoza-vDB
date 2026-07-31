@@ -104,6 +104,11 @@ def _v(scheme, s):
         return None
 
 
+def _strip_epoch(v: str) -> str:
+    """Drop a leading `N:` epoch so a version compares on version-release alone (rpm/deb)."""
+    return v.split(":", 1)[1] if ":" in v else v
+
+
 def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
     """True/False, or None when the versions can't be compared."""
     if status in _SKIP:
@@ -117,7 +122,20 @@ def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
             return False
     if fixed:
         fx = _v(scheme, fixed)
-        return (iv < fx) if fx is not None else None
+        if fx is None:
+            return None
+        if not (iv < fx):
+            return False
+        # no-downgrade guard (rpm/deb): a fix is a real upgrade only when the host is below it in
+        # version-release too, not solely by epoch. A higher-epoch but OLDER build — e.g. Oracle's
+        # malformed 31:qemu-7.2.0-37 against a 17:qemu-9.1.0 host — would otherwise flag the host
+        # and be surfaced as a "fix" that is actually a downgrade. Legit epoch bumps (higher epoch
+        # AND version) still pass, since there the host is genuinely below in version-release too.
+        if scheme in ("rpm", "deb"):
+            hv, fv = _v(scheme, _strip_epoch(installed)), _v(scheme, _strip_epoch(fixed))
+            if hv is not None and fv is not None and hv >= fv:
+                return False
+        return True
     if last_affected:
         la = _v(scheme, last_affected)
         return (iv <= la) if la is not None else None
@@ -184,30 +202,65 @@ def _rpm_sources(distro, namespace):
 
 
 def _el_streams(major, minor):
-    """el9_3 → [el9, el9_0, … el9_3]. Red Hat keys affected/won't-fix at the major stream and
-    fixes at the specific minor; a host on 9.3 inherits every fix from 9.0–9.3."""
+    """The RHEL streams a host on elN_M is actually served by: its OWN minor (elN_M) plus the base
+    major stream (elN — where Red Hat keys the major-stream/OVAL fix and the affected/won't-fix
+    statements). OTHER minors are EUS backport lines with independent release numbering (libxslt
+    1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10) that a host on a different minor never runs; including them
+    makes the host look "below" a foreign line's higher-sorting build → false positives and a wrong
+    remediation target. A fix the host inherited from an EARLIER minor is already rolled into its own
+    higher build (so no true positive is lost by dropping it), and a fix that landed in a LATER minor
+    is carried by the base/OVAL major (elN) row — so (elN, elN_M) is the correct, complete scope."""
     if minor is None:
         return [f"el{major}"]
-    return [f"el{major}"] + [f"el{major}_{n}" for n in range(int(minor) + 1)]
+    return [f"el{major}", f"el{major}_{minor}"]
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative for the major;
-    when it carries no minor (a bare `.el8` — common for BaseOS/AppStream base packages Red Hat does
-    not rebuild per minor, e.g. postfix 3.5.8-7.el8) borrow the minor from the `distro=`/release
-    (redhat-8.10 → 10) so the host still inherits every minor-stream fix up to its release; otherwise
-    a bare-tag host resolves to just [elN] and misses el N_M fixes (false negative). The release is
-    also the full fallback when the version carries no tag at all."""
+    """Resolve the RHEL stream set. The version's `.elN_M` dist tag gives the package's build minor,
+    but the host's actual OS minor is the `distro=`/release (redhat-8.10, ol-9.7). Use the HIGHER of
+    the two as the host's minor, because:
+      - a bare `.el8` tag (base/AppStream packages Red Hat doesn't rebuild per minor, e.g. postfix
+        3.5.8-7.el8) carries no minor at all → take it from distro= or the host resolves to just
+        [elN] and misses elN_M fixes (false negative);
+      - a package can lag its OS minor (flatpak 1.12.9-4.el9_6 on a 9.7 host) → the host still tracks
+        the newer OS minor, so scoping to the build tag's OLDER minor pulls in that minor's EUS
+        backport line and yields the wrong (insufficient) remediation instead of the current fix
+        carried by the elN major/OVAL row.
+    The release is also the full fallback when the version carries no tag at all."""
     rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
     rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        minor = minor if minor.isdigit() else None
-        if minor is None and rmaj == major and rmin:   # bare .elN → take the minor from distro=
-            minor = rmin
-        return _el_streams(major, minor)
+        vmin = int(minor) if minor.isdigit() else None
+        if rmaj == major and rmin and rmin.isdigit():     # host OS minor (distro=) — take the higher
+            vmin = int(rmin) if vmin is None else max(vmin, int(rmin))
+        return _el_streams(major, str(vmin) if vmin is not None else None)
     return _el_streams(rmaj, rmin) if rmaj else None
+
+
+# Parallel product lines that share a package NAME but that a host is never simultaneously on.
+# Each is identified by a substring in the rpm RELEASE — carried on BOTH the host version and the
+# stored `fixed` — and is numbered to sort ABOVE the regular build, so without this guard a regular
+# host looks "below" such a fix, is falsely flagged, and it becomes the wrong remediation (e.g. a
+# RHEL container-tools podman `4.9.4-…module+el8` steered to the OpenShift `5.2.x-…rhaos4.17.el8`).
+# A fix is only comparable to a host carrying the SAME tag; a tag-less (regular) host skips them all.
+# CENTRAL list — add a marker only after confirming it is a genuinely separate line (the package
+# has both tagged and untagged builds), so a real fix is never wrongly skipped. Keep substrings long
+# enough to be unambiguous (avoid short fragments that could hit a hash or an unrelated version).
+_VARIANT_TAGS = (
+    "_fips",      # FIPS-validated crypto (RHEL/Oracle) — epoch-bumped
+    "ksplice",    # Oracle Ksplice live-patch stream
+    "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
+)
+
+
+def _variant(evr):
+    """The parallel product line an rpm EVR belongs to (see :data:`_VARIANT_TAGS`), or None for a
+    regular build. A fix is only comparable to a host of the same variant; the marker rides in the
+    version string, so both the host version and the stored `fixed` carry it."""
+    r = (evr or "").lower()
+    return next((t for t in _VARIANT_TAGS if t in r), None)
 
 
 def _lane(ptype, version, quals, release=None):
@@ -346,12 +399,15 @@ def match(conn, purl, version=None, release=None, curations=None):
     else:                                           # deb / ecosystem → exact release or NULL
         sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
         params = (eco, pkgs, rel, rel)
+    host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
     findings = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
         for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in cur.fetchall():
             if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
                 continue
+            if (rv := _variant(fixed)) is not None and rv != host_var:
+                continue                     # foreign parallel line (fips/ksplice) — never the host's
             ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
                                 "release": rel_row, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
