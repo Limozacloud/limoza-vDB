@@ -104,6 +104,11 @@ def _v(scheme, s):
         return None
 
 
+def _strip_epoch(v: str) -> str:
+    """Drop a leading `N:` epoch so a version compares on version-release alone (rpm/deb)."""
+    return v.split(":", 1)[1] if ":" in v else v
+
+
 def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
     """True/False, or None when the versions can't be compared."""
     if status in _SKIP:
@@ -117,7 +122,20 @@ def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
             return False
     if fixed:
         fx = _v(scheme, fixed)
-        return (iv < fx) if fx is not None else None
+        if fx is None:
+            return None
+        if not (iv < fx):
+            return False
+        # no-downgrade guard (rpm/deb): a fix is a real upgrade only when the host is below it in
+        # version-release too, not solely by epoch. A higher-epoch but OLDER build — e.g. Oracle's
+        # malformed 31:qemu-7.2.0-37 against a 17:qemu-9.1.0 host — would otherwise flag the host
+        # and be surfaced as a "fix" that is actually a downgrade. Legit epoch bumps (higher epoch
+        # AND version) still pass, since there the host is genuinely below in version-release too.
+        if scheme in ("rpm", "deb"):
+            hv, fv = _v(scheme, _strip_epoch(installed)), _v(scheme, _strip_epoch(fixed))
+            if hv is not None and fv is not None and hv >= fv:
+                return False
+        return True
     if last_affected:
         la = _v(scheme, last_affected)
         return (iv <= la) if la is not None else None
