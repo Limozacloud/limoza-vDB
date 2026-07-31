@@ -10,6 +10,7 @@ A component is a purl (glance's output) with a version, optionally a release:
     pkg:pypi/django@2.0                          → ecosystem pypi, no release
 """
 import re
+from urllib.parse import unquote
 
 from univers.versions import (AlpineLinuxVersion, ComposerVersion, DebianVersion,
                                GenericVersion, GolangVersion, MavenVersion, NugetVersion,
@@ -394,7 +395,11 @@ def match(conn, purl, version=None, release=None, curations=None):
     # are source-keyed, or an rpm binary OVAL didn't test. Querying the source when the binary HAS its
     # own rows would compare the binary's own version against the SOURCE's fix version (perl-B 1.80 vs
     # perl 5.32.1) → a false positive (issue #36).
-    binary = (purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
+    # unquote: glance percent-encodes `+` (and other reserved chars) in the purl name, so libstdc++
+    # arrives as `libstdc%2B%2B`; the affected table stores the decoded name (`libstdc++`), so the
+    # binary lookup must decode too or it silently misses every +-bearing package (libstdc++, gcc-c++,
+    # ImageMagick-c++ …) and falls through to the source.
+    binary = (unquote(purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1]).lower()
               if ptype in ("rpm", "deb") else None)
     primary = binary or name.lower()
     source_pkg = (quals.get("upstream") or "").lower()
