@@ -216,21 +216,26 @@ def _el_streams(major, minor):
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag is authoritative for the major;
-    when it carries no minor (a bare `.el8` — common for BaseOS/AppStream base packages Red Hat does
-    not rebuild per minor, e.g. postfix 3.5.8-7.el8) borrow the minor from the `distro=`/release
-    (redhat-8.10 → 10) so the host still inherits every minor-stream fix up to its release; otherwise
-    a bare-tag host resolves to just [elN] and misses el N_M fixes (false negative). The release is
-    also the full fallback when the version carries no tag at all."""
+    """Resolve the RHEL stream set. The version's `.elN_M` dist tag gives the package's build minor,
+    but the host's actual OS minor is the `distro=`/release (redhat-8.10, ol-9.7). Use the HIGHER of
+    the two as the host's minor, because:
+      - a bare `.el8` tag (base/AppStream packages Red Hat doesn't rebuild per minor, e.g. postfix
+        3.5.8-7.el8) carries no minor at all → take it from distro= or the host resolves to just
+        [elN] and misses elN_M fixes (false negative);
+      - a package can lag its OS minor (flatpak 1.12.9-4.el9_6 on a 9.7 host) → the host still tracks
+        the newer OS minor, so scoping to the build tag's OLDER minor pulls in that minor's EUS
+        backport line and yields the wrong (insufficient) remediation instead of the current fix
+        carried by the elN major/OVAL row.
+    The release is also the full fallback when the version carries no tag at all."""
     rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
     rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        minor = minor if minor.isdigit() else None
-        if minor is None and rmaj == major and rmin:   # bare .elN → take the minor from distro=
-            minor = rmin
-        return _el_streams(major, minor)
+        vmin = int(minor) if minor.isdigit() else None
+        if rmaj == major and rmin and rmin.isdigit():     # host OS minor (distro=) — take the higher
+            vmin = int(rmin) if vmin is None else max(vmin, int(rmin))
+        return _el_streams(major, str(vmin) if vmin is not None else None)
     return _el_streams(rmaj, rmin) if rmaj else None
 
 
