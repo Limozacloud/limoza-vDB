@@ -10,6 +10,7 @@ A component is a purl (glance's output) with a version, optionally a release:
     pkg:pypi/django@2.0                          → ecosystem pypi, no release
 """
 import re
+from urllib.parse import unquote
 
 from univers.versions import (AlpineLinuxVersion, ComposerVersion, DebianVersion,
                                GenericVersion, GolangVersion, MavenVersion, NugetVersion,
@@ -201,42 +202,42 @@ def _rpm_sources(distro, namespace):
     return None
 
 
-def _el_streams(major, minor):
-    """The RHEL streams a host on elN_M is actually served by: its OWN minor (elN_M) plus the base
-    major stream (elN — where Red Hat keys the major-stream/OVAL fix and the affected/won't-fix
-    statements). OTHER minors are EUS backport lines with independent release numbering (libxslt
-    1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10) that a host on a different minor never runs; including them
-    makes the host look "below" a foreign line's higher-sorting build → false positives and a wrong
-    remediation target. A fix the host inherited from an EARLIER minor is already rolled into its own
-    higher build (so no true positive is lost by dropping it), and a fix that landed in a LATER minor
-    is carried by the base/OVAL major (elN) row — so (elN, elN_M) is the correct, complete scope."""
-    if minor is None:
-        return [f"el{major}"]
-    return [f"el{major}", f"el{major}_{minor}"]
+def _el_streams(major, minors):
+    """The RHEL streams a host is actually served by: the base major stream (elN — where Red Hat keys
+    the major-stream/OVAL fix and the affected/won't-fix statements) plus each minor line the host is
+    genuinely on. `minors` is that set of minor numbers (the package's own dist-tag minor and, when
+    known, the host OS minor); pass None/empty for a base-only (elN) scope. OTHER minors are foreign
+    EUS backport lines with independent release numbering (libxslt 1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10)
+    that the host never runs; including them makes the host look "below" a foreign line's
+    higher-sorting build → false positives, so they stay out."""
+    streams = [f"el{major}"]
+    for mn in dict.fromkeys(m for m in (minors or ()) if m is not None):
+        streams.append(f"el{major}_{mn}")
+    return streams
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag gives the package's build minor,
-    but the host's actual OS minor is the `distro=`/release (redhat-8.10, ol-9.7). Use the HIGHER of
-    the two as the host's minor, because:
-      - a bare `.el8` tag (base/AppStream packages Red Hat doesn't rebuild per minor, e.g. postfix
-        3.5.8-7.el8) carries no minor at all → take it from distro= or the host resolves to just
-        [elN] and misses elN_M fixes (false negative);
-      - a package can lag its OS minor (flatpak 1.12.9-4.el9_6 on a 9.7 host) → the host still tracks
-        the newer OS minor, so scoping to the build tag's OLDER minor pulls in that minor's EUS
-        backport line and yields the wrong (insufficient) remediation instead of the current fix
-        carried by the elN major/OVAL row.
-    The release is also the full fallback when the version carries no tag at all."""
+    """Resolve the RHEL stream set. The package's OWN `.elN_M` dist tag is authoritative: the host
+    literally runs a build from that line, so a fix keyed to it applies directly — openssl
+    1.1.1k-15.el8_6 vs the -17.el8_6 fix is the SAME line, even on an 8.10 host (Red Hat freezes the
+    el8_6 tag and ships later fixes under it rather than rebuilding per minor). The host's OS minor
+    from `distro=`/release is ADDED to the scope, never used to override the package's own line:
+      - a bare `.el8` tag (base/AppStream packages not rebuilt per minor, e.g. postfix 3.5.8-7.el8)
+        carries no minor of its own → it inherits the distro minor (else it resolves to just [elN]
+        and misses elN_M fixes);
+      - a fix that landed in the current OS minor still applies, so that minor stays in scope too.
+    An earlier `max(build, distro)` collapsed both to the higher minor and dropped the frozen-tag
+    line, silently missing those EUS fixes (false negative). The release is the full fallback when
+    the version carries no tag at all."""
     rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
     rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        vmin = int(minor) if minor.isdigit() else None
-        if rmaj == major and rmin and rmin.isdigit():     # host OS minor (distro=) — take the higher
-            vmin = int(rmin) if vmin is None else max(vmin, int(rmin))
-        return _el_streams(major, str(vmin) if vmin is not None else None)
-    return _el_streams(rmaj, rmin) if rmaj else None
+        vmin = minor if minor.isdigit() else None                 # the package's own build minor
+        omin = rmin if (rmaj == major and rmin and rmin.isdigit()) else None   # host OS minor
+        return _el_streams(major, (vmin, omin))
+    return _el_streams(rmaj, (rmin,)) if rmaj else None
 
 
 # Parallel product lines that share a package NAME but that a host is never simultaneously on.
@@ -254,13 +255,28 @@ _VARIANT_TAGS = (
     "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
 )
 
+# Layered products & special kernels carry a dist tag of the form elN<letters>: el9ap (Ansible
+# Automation Platform), el8eap/el9eap (JBoss EAP), el9uek/el10uek (Oracle UEK kernel), el7ost/el8ost
+# (OpenStack), el7sat/el8sat (Satellite), el9cp/el8cp (OpenShift), el8jbcs/el8jws (JBoss) … — each a
+# separate line that ships its OWN, often much newer build (python3-requests 2.32.2-1.el9ap vs the
+# base 2.25.1-9.el9). A base build is ONLY ever elN or elN_M, so a letter right after the digits is
+# never the base line (nor a hex hash — `l` isn't hex); such a fix is comparable only to a host that
+# itself carries the tag. The tag rides in the installed EVR, so a host genuinely on the product
+# matches its own fixes, while a base host skips them.
+_LAYERED_RE = re.compile(r"el\d+[a-z]+")
+
 
 def _variant(evr):
-    """The parallel product line an rpm EVR belongs to (see :data:`_VARIANT_TAGS`), or None for a
-    regular build. A fix is only comparable to a host of the same variant; the marker rides in the
-    version string, so both the host version and the stored `fixed` carry it."""
+    """The parallel product line an rpm EVR belongs to (a :data:`_VARIANT_TAGS` marker or a layered
+    elN<letters> dist tag), or None for a regular build. A fix is only comparable to a host of the
+    same variant; the marker rides in the version string, so host version and stored `fixed` carry
+    it."""
     r = (evr or "").lower()
-    return next((t for t in _VARIANT_TAGS if t in r), None)
+    tag = next((t for t in _VARIANT_TAGS if t in r), None)
+    if tag:
+        return tag
+    m = _LAYERED_RE.search(r)
+    return m.group(0) if m else None
 
 
 def _lane(ptype, version, quals, release=None):
@@ -373,48 +389,56 @@ def match(conn, purl, version=None, release=None, curations=None):
     if ptype == "rpm" and quals.get("epoch") and ":" not in version:
         version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    # rpm/deb: `name` resolved to the SOURCE package (the `upstream` qualifier wins) because most
-    # vendor advisories are source-keyed. But OVAL tests each BINARY rpm, so the per-package fix
-    # build is frequently keyed under the binary name (vim-common → fixed 2:8.2.2637-26.el9_8.10)
-    # while the source name (vim) carries only a version-less "affected" row — a source-only lookup
-    # then returns the CVE but no fix version. Look up BOTH names so the binary-keyed fix is not
-    # lost. (Source-keyed advisories still match via the source name; a source that is itself a
-    # binary — glibc, openssl — already coincided, which is why those "happened to work".)
-    pkgs = [name.lower()]
-    if ptype in ("rpm", "deb"):
-        binary = purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
-        if binary and binary not in pkgs:
-            pkgs.append(binary)
+    # binary-first: OVAL/CSAF list every BINARY rpm with its OWN correctly-versioned rows (perl-B's
+    # own 1.80 builds, vim-common's fix build). Prefer them; the SOURCE package (the `upstream=`
+    # qualifier) is only a FALLBACK for binaries that have no rows of their own — deb, where advisories
+    # are source-keyed, or an rpm binary OVAL didn't test. Querying the source when the binary HAS its
+    # own rows would compare the binary's own version against the SOURCE's fix version (perl-B 1.80 vs
+    # perl 5.32.1) → a false positive (issue #36).
+    # unquote: glance percent-encodes `+` (and other reserved chars) in the purl name, so libstdc++
+    # arrives as `libstdc%2B%2B`; the affected table stores the decoded name (`libstdc++`), so the
+    # binary lookup must decode too or it silently misses every +-bearing package (libstdc++, gcc-c++,
+    # ImageMagick-c++ …) and falls through to the source.
+    binary = (unquote(purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1]).lower()
+              if ptype in ("rpm", "deb") else None)
+    primary = binary or name.lower()
+    source_pkg = (quals.get("upstream") or "").lower()
     # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status, status_raw FROM affected "
-            "WHERE ecosystem = %s AND lower(package) = ANY(%s) ")
+            "WHERE ecosystem = %s AND lower(package) = %s ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
-        sql, params = base + "AND release = ANY(%s)", (eco, pkgs, rel)
+        tail, extra = "AND release = ANY(%s)", (rel,)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
-            sql += " AND source = ANY(%s)"
-            params = params + (sources,)
+            tail, extra = tail + " AND source = ANY(%s)", extra + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
-        sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
-        params = (eco, pkgs, rel, rel)
+        tail, extra = "AND (release = %s OR (%s::text IS NULL AND release IS NULL))", (rel, rel)
+    sql = base + tail
+
+    def _fetch(pkg):
+        with conn.cursor() as cur:
+            cur.execute(sql, (eco, pkg) + extra)
+            return cur.fetchall()
+
+    rows = _fetch(primary)
+    if not rows and source_pkg and source_pkg != primary:
+        rows = _fetch(source_pkg)        # source fallback (deb; or an rpm binary OVAL didn't test)
     host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
     findings = {}
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in cur.fetchall():
-            if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
-                continue
-            if (rv := _variant(fixed)) is not None and rv != host_var:
-                continue                     # foreign parallel line (fips/ksplice) — never the host's
-            ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
-                                "release": rel_row, "source": src, "status": status,
-                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
-            if ctx is None:
-                continue                                          # suppressed by a curation rule
-            if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
-                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
+    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in rows:
+        if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
+            continue
+        if (rv := _variant(fixed)) is not None and rv != host_var:
+            continue                     # foreign parallel line (fips/ksplice) — never the host's
+        ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
+                            "release": rel_row, "source": src, "status": status,
+                            "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+        if ctx is None:
+            continue                                              # suppressed by a curation rule
+        if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
+            findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
     return findings
 
 
@@ -433,13 +457,20 @@ def remediation(findings: dict):
         return None
     fixable, unfixed = [], 0
     for cve, hits in findings.items():
-        f = next((h[2] for h in hits if h[2]), None)
-        if f:
-            fixable.append((cve, f,
-                            next((h[3] for h in hits if h[3]), None),      # fix_kb
-                            next((h[4] for h in hits), "generic")))         # scheme
-        else:
+        cand = [h for h in hits if h[2]]                    # hits that carry a fix
+        if not cand:
             unfixed += 1
+            continue
+        # per CVE take its HIGHEST fix, not an arbitrary first: Red Hat lists the same CVE across
+        # several in-scope lines (flatpak's el9_6.1 EUS backport alongside the el9-base el9_8.1), and
+        # the newest build is the real upgrade target — the first would surface a stale, insufficient
+        # fix. Same comparator choice as the cross-CVE max below.
+        sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
+        parse = [h for h in cand if _v(sc, h[2]) is not None]
+        pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
+        fixable.append((cve, pick[2],
+                        next((h[3] for h in hits if h[3]), None),          # fix_kb
+                        pick[4]))                                          # scheme
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
     schemes = {s for *_, s in fixable}
