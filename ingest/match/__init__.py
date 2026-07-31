@@ -201,42 +201,42 @@ def _rpm_sources(distro, namespace):
     return None
 
 
-def _el_streams(major, minor):
-    """The RHEL streams a host on elN_M is actually served by: its OWN minor (elN_M) plus the base
-    major stream (elN — where Red Hat keys the major-stream/OVAL fix and the affected/won't-fix
-    statements). OTHER minors are EUS backport lines with independent release numbering (libxslt
-    1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10) that a host on a different minor never runs; including them
-    makes the host look "below" a foreign line's higher-sorting build → false positives and a wrong
-    remediation target. A fix the host inherited from an EARLIER minor is already rolled into its own
-    higher build (so no true positive is lost by dropping it), and a fix that landed in a LATER minor
-    is carried by the base/OVAL major (elN) row — so (elN, elN_M) is the correct, complete scope."""
-    if minor is None:
-        return [f"el{major}"]
-    return [f"el{major}", f"el{major}_{minor}"]
+def _el_streams(major, minors):
+    """The RHEL streams a host is actually served by: the base major stream (elN — where Red Hat keys
+    the major-stream/OVAL fix and the affected/won't-fix statements) plus each minor line the host is
+    genuinely on. `minors` is that set of minor numbers (the package's own dist-tag minor and, when
+    known, the host OS minor); pass None/empty for a base-only (elN) scope. OTHER minors are foreign
+    EUS backport lines with independent release numbering (libxslt 1.1.32-8.el8_6 vs 1.1.32-6.4.el8_10)
+    that the host never runs; including them makes the host look "below" a foreign line's
+    higher-sorting build → false positives, so they stay out."""
+    streams = [f"el{major}"]
+    for mn in dict.fromkeys(m for m in (minors or ()) if m is not None):
+        streams.append(f"el{major}_{mn}")
+    return streams
 
 
 def _rpm_streams(version, rel):
-    """Resolve the RHEL stream set. The version's `.elN_M` dist tag gives the package's build minor,
-    but the host's actual OS minor is the `distro=`/release (redhat-8.10, ol-9.7). Use the HIGHER of
-    the two as the host's minor, because:
-      - a bare `.el8` tag (base/AppStream packages Red Hat doesn't rebuild per minor, e.g. postfix
-        3.5.8-7.el8) carries no minor at all → take it from distro= or the host resolves to just
-        [elN] and misses elN_M fixes (false negative);
-      - a package can lag its OS minor (flatpak 1.12.9-4.el9_6 on a 9.7 host) → the host still tracks
-        the newer OS minor, so scoping to the build tag's OLDER minor pulls in that minor's EUS
-        backport line and yields the wrong (insufficient) remediation instead of the current fix
-        carried by the elN major/OVAL row.
-    The release is also the full fallback when the version carries no tag at all."""
+    """Resolve the RHEL stream set. The package's OWN `.elN_M` dist tag is authoritative: the host
+    literally runs a build from that line, so a fix keyed to it applies directly — openssl
+    1.1.1k-15.el8_6 vs the -17.el8_6 fix is the SAME line, even on an 8.10 host (Red Hat freezes the
+    el8_6 tag and ships later fixes under it rather than rebuilding per minor). The host's OS minor
+    from `distro=`/release is ADDED to the scope, never used to override the package's own line:
+      - a bare `.el8` tag (base/AppStream packages not rebuilt per minor, e.g. postfix 3.5.8-7.el8)
+        carries no minor of its own → it inherits the distro minor (else it resolves to just [elN]
+        and misses elN_M fixes);
+      - a fix that landed in the current OS minor still applies, so that minor stays in scope too.
+    An earlier `max(build, distro)` collapsed both to the higher minor and dropped the frozen-tag
+    line, silently missing those EUS fixes (false negative). The release is the full fallback when
+    the version carries no tag at all."""
     rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
     rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
-        vmin = int(minor) if minor.isdigit() else None
-        if rmaj == major and rmin and rmin.isdigit():     # host OS minor (distro=) — take the higher
-            vmin = int(rmin) if vmin is None else max(vmin, int(rmin))
-        return _el_streams(major, str(vmin) if vmin is not None else None)
-    return _el_streams(rmaj, rmin) if rmaj else None
+        vmin = minor if minor.isdigit() else None                 # the package's own build minor
+        omin = rmin if (rmaj == major and rmin and rmin.isdigit()) else None   # host OS minor
+        return _el_streams(major, (vmin, omin))
+    return _el_streams(rmaj, (rmin,)) if rmaj else None
 
 
 # Parallel product lines that share a package NAME but that a host is never simultaneously on.
@@ -452,13 +452,20 @@ def remediation(findings: dict):
         return None
     fixable, unfixed = [], 0
     for cve, hits in findings.items():
-        f = next((h[2] for h in hits if h[2]), None)
-        if f:
-            fixable.append((cve, f,
-                            next((h[3] for h in hits if h[3]), None),      # fix_kb
-                            next((h[4] for h in hits), "generic")))         # scheme
-        else:
+        cand = [h for h in hits if h[2]]                    # hits that carry a fix
+        if not cand:
             unfixed += 1
+            continue
+        # per CVE take its HIGHEST fix, not an arbitrary first: Red Hat lists the same CVE across
+        # several in-scope lines (flatpak's el9_6.1 EUS backport alongside the el9-base el9_8.1), and
+        # the newest build is the real upgrade target — the first would surface a stale, insufficient
+        # fix. Same comparator choice as the cross-CVE max below.
+        sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
+        parse = [h for h in cand if _v(sc, h[2]) is not None]
+        pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
+        fixable.append((cve, pick[2],
+                        next((h[3] for h in hits if h[3]), None),          # fix_kb
+                        pick[4]))                                          # scheme
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
     schemes = {s for *_, s in fixable}
