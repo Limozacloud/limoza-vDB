@@ -373,48 +373,52 @@ def match(conn, purl, version=None, release=None, curations=None):
     if ptype == "rpm" and quals.get("epoch") and ":" not in version:
         version = f"{quals['epoch']}:{version}"      # RPM epoch governs the compare (1:3.2 > 3.9)
     eco, rel = _lane(ptype, version, quals, release)
-    # rpm/deb: `name` resolved to the SOURCE package (the `upstream` qualifier wins) because most
-    # vendor advisories are source-keyed. But OVAL tests each BINARY rpm, so the per-package fix
-    # build is frequently keyed under the binary name (vim-common → fixed 2:8.2.2637-26.el9_8.10)
-    # while the source name (vim) carries only a version-less "affected" row — a source-only lookup
-    # then returns the CVE but no fix version. Look up BOTH names so the binary-keyed fix is not
-    # lost. (Source-keyed advisories still match via the source name; a source that is itself a
-    # binary — glibc, openssl — already coincided, which is why those "happened to work".)
-    pkgs = [name.lower()]
-    if ptype in ("rpm", "deb"):
-        binary = purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
-        if binary and binary not in pkgs:
-            pkgs.append(binary)
+    # binary-first: OVAL/CSAF list every BINARY rpm with its OWN correctly-versioned rows (perl-B's
+    # own 1.80 builds, vim-common's fix build). Prefer them; the SOURCE package (the `upstream=`
+    # qualifier) is only a FALLBACK for binaries that have no rows of their own — deb, where advisories
+    # are source-keyed, or an rpm binary OVAL didn't test. Querying the source when the binary HAS its
+    # own rows would compare the binary's own version against the SOURCE's fix version (perl-B 1.80 vs
+    # perl 5.32.1) → a false positive (issue #36).
+    binary = (purl.split("?", 1)[0].split("@", 1)[0].rsplit("/", 1)[-1].lower()
+              if ptype in ("rpm", "deb") else None)
+    primary = binary or name.lower()
+    source_pkg = (quals.get("upstream") or "").lower()
     # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status, status_raw FROM affected "
-            "WHERE ecosystem = %s AND lower(package) = ANY(%s) ")
+            "WHERE ecosystem = %s AND lower(package) = %s ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
-        sql, params = base + "AND release = ANY(%s)", (eco, pkgs, rel)
+        tail, extra = "AND release = ANY(%s)", (rel,)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
-            sql += " AND source = ANY(%s)"
-            params = params + (sources,)
+            tail, extra = tail + " AND source = ANY(%s)", extra + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
-        sql = base + "AND (release = %s OR (%s::text IS NULL AND release IS NULL))"
-        params = (eco, pkgs, rel, rel)
+        tail, extra = "AND (release = %s OR (%s::text IS NULL AND release IS NULL))", (rel, rel)
+    sql = base + tail
+
+    def _fetch(pkg):
+        with conn.cursor() as cur:
+            cur.execute(sql, (eco, pkg) + extra)
+            return cur.fetchall()
+
+    rows = _fetch(primary)
+    if not rows and source_pkg and source_pkg != primary:
+        rows = _fetch(source_pkg)        # source fallback (deb; or an rpm binary OVAL didn't test)
     host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
     findings = {}
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in cur.fetchall():
-            if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
-                continue
-            if (rv := _variant(fixed)) is not None and rv != host_var:
-                continue                     # foreign parallel line (fips/ksplice) — never the host's
-            ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": name, "cpe23": None,
-                                "release": rel_row, "source": src, "status": status,
-                                "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
-            if ctx is None:
-                continue                                          # suppressed by a curation rule
-            if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
-                findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
+    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in rows:
+        if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
+            continue
+        if (rv := _variant(fixed)) is not None and rv != host_var:
+            continue                     # foreign parallel line (fips/ksplice) — never the host's
+        ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
+                            "release": rel_row, "source": src, "status": status,
+                            "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
+        if ctx is None:
+            continue                                              # suppressed by a curation rule
+        if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
+            findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
     return findings
 
 
