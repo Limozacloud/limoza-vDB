@@ -216,19 +216,28 @@ def _rpm_streams(version, rel):
     return _el_streams(rmaj, rmin) if rmaj else None
 
 
+# Parallel product lines that share a package NAME but that a host is never simultaneously on.
+# Each is identified by a substring in the rpm RELEASE — carried on BOTH the host version and the
+# stored `fixed` — and is numbered to sort ABOVE the regular build, so without this guard a regular
+# host looks "below" such a fix, is falsely flagged, and it becomes the wrong remediation (e.g. a
+# RHEL container-tools podman `4.9.4-…module+el8` steered to the OpenShift `5.2.x-…rhaos4.17.el8`).
+# A fix is only comparable to a host carrying the SAME tag; a tag-less (regular) host skips them all.
+# CENTRAL list — add a marker only after confirming it is a genuinely separate line (the package
+# has both tagged and untagged builds), so a real fix is never wrongly skipped. Keep substrings long
+# enough to be unambiguous (avoid short fragments that could hit a hash or an unrelated version).
+_VARIANT_TAGS = (
+    "_fips",      # FIPS-validated crypto (RHEL/Oracle) — epoch-bumped
+    "ksplice",    # Oracle Ksplice live-patch stream
+    "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
+)
+
+
 def _variant(evr):
-    """Parallel build variant of an rpm EVR — a separate product line that shares the package name
-    but that a host is never simultaneously on. FIPS (`_fips`) and Oracle ksplice (`.ksplice`) tag the
-    release and are numbered to sort ABOVE the regular build, so a regular host looks "below" such a
-    fix and is falsely flagged (and it becomes the wrong remediation). Returns the variant tag, or None
-    for a regular build; a fix is only comparable to a host of the same variant. The marker rides in
-    the version string itself, so both sides (host version and stored `fixed`) carry it."""
+    """The parallel product line an rpm EVR belongs to (see :data:`_VARIANT_TAGS`), or None for a
+    regular build. A fix is only comparable to a host of the same variant; the marker rides in the
+    version string, so both the host version and the stored `fixed` carry it."""
     r = (evr or "").lower()
-    if "_fips" in r:
-        return "fips"
-    if "ksplice" in r:
-        return "ksplice"
-    return None
+    return next((t for t in _VARIANT_TAGS if t in r), None)
 
 
 def _lane(ptype, version, quals, release=None):
