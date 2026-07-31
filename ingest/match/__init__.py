@@ -253,6 +253,7 @@ _VARIANT_TAGS = (
     "_fips",      # FIPS-validated crypto (RHEL/Oracle) — epoch-bumped
     "ksplice",    # Oracle Ksplice live-patch stream
     "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
+    "module",     # RHEL AppStream module co-rebuild (.module+elN) — a non-module host never runs it
 )
 
 # Layered products & special kernels carry a dist tag of the form elN<letters>: el9ap (Ansible
