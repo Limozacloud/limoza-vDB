@@ -36,6 +36,6 @@ def delete_scope(conn, origin: str) -> None:
     conn.commit()
 
 
-def flush(cur, rows: list) -> None:
+def flush(cur, rows: list, table: str = "affected") -> None:
     if rows:
-        execute_values(cur, "INSERT INTO affected (" + ",".join(COLS) + ") VALUES %s", rows)
+        execute_values(cur, f"INSERT INTO {table} (" + ",".join(COLS) + ") VALUES %s", rows)
