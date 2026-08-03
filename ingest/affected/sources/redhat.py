@@ -25,6 +25,9 @@ ORIGIN = SOURCE = "redhat"
 
 _EL = re.compile(r"enterprise_linux(?:_\w+)?:(\d+)(?:\.(\d+))?")   # base + _eus/_aus/_e4s/_tus/_els
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")                           # dist tag in an RPM version
+# base-RHEL platform CPE: enterprise_linux or any rhel_* stream. A layered product (openshift,
+# openstack, jboss, acm, …) fails this and is skipped in _resolve so its bundled rpms don't leak.
+_BASE_PLATFORM = re.compile(r":redhat:(?:enterprise_linux|rhel)(?:_[a-z0-9]+)*:")
 
 
 def _dist_tag(evr: str | None):
@@ -102,6 +105,18 @@ def _resolve(pid, cpe_by_id, purl_by_id, rel):
     pkg_ref, plat_ref = rel.get(pid, (None, None))
     if plat_ref is None and ":" in pid:
         plat_ref = pid.split(":", 1)[0]
+    # The platform must be base RHEL — enterprise_linux or any rhel_* stream (EUS/AUS/E4S/TUS/ELS,
+    # software_collections, dotnet, satellite_client). LAYERED products — OpenShift, OpenStack, ACM,
+    # Ansible Automation Platform, JBoss, Ceph, Satellite server, … — bundle unrelated rpms: a Go
+    # net/http CVE's OpenShift-Ironic errata ships python-bcrypt, httpd, six, …, and Red Hat lists
+    # every bundled rpm as "fixed". Those builds carry a plain .elN dist tag, so without this guard
+    # they leak onto a base el8 host (python3-bcrypt flagged for a Go CVE). A base host runs base
+    # packages, covered by the enterprise_linux/rhel_* rows; the layered listing is spurious for it.
+    # Skip a platform whose CPE names a non-RHEL product; keep enterprise_linux/rhel_* and CPE-less
+    # platforms (the latter are the version-tag-scoped base rows).
+    plat_cpe = cpe_by_id.get(plat_ref)
+    if plat_cpe and not _BASE_PLATFORM.search(plat_cpe):
+        return None, None, None, None
     purl = purl_by_id.get(pkg_ref) if pkg_ref else None
     if purl and purl.startswith("pkg:rpm"):
         name, evr, base, stream = _from_purl(purl)
