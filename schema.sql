@@ -367,6 +367,7 @@ CREATE TABLE IF NOT EXISTS affected (
     last_affected  TEXT,
     fix_kb         TEXT,      -- remediation reference for the fix (Microsoft MSRC KB, e.g. 'KB5043050'); NULL for distro/ecosystem sources
     version_scheme TEXT,
+    module_stream  TEXT,      -- RHEL AppStream module identity `name:stream` (e.g. 'nodejs:18') from the rpmmod purl qualifier; NULL for non-modular rows. Scopes a module host to its own stream so nodejs:10 isn't matched against a nodejs:12 fix.
     status         TEXT NOT NULL CHECK (status IN
                      ('not_affected','under_investigation','affected','fixed','wont_fix','unknown')),
     status_raw     TEXT,

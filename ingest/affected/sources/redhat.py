@@ -47,15 +47,26 @@ def _release(cpe: str | None):
     return f"el{m.group(1)}" + (f"_{m.group(2)}" if m.group(2) else "")
 
 
+def _mod_stream(rpmmod: str | None):
+    """AppStream module identity `name:stream` from an `rpmmod` qualifier value
+    (`nodejs:14:8030020210126165503:229f0a1c` → `nodejs:14`), or None. Only name:stream is
+    kept — version:context differ per rebuild and must not enter the comparison."""
+    if not rpmmod:
+        return None
+    parts = rpmmod.split(":")
+    return ":".join(parts[:2]) if len(parts) >= 2 and parts[0] and parts[1] else None
+
+
 def _from_purl(purl: str):
-    """pkg:rpm/redhat/kernel-headers@5.14.0-70.105.1.el9_0?arch=x&epoch=0
-       → (name, evr, purl_base)."""
+    """pkg:rpm/redhat/nodejs@14.15.4-2.module+el8.3.0+…?epoch=1&rpmmod=nodejs:14:8030…:229f…
+       → (name, evr, purl_base, module_stream)."""
     head, _, qs = purl.partition("?")
     base_ver, _, ver = head.partition("@")
     name = base_ver.rsplit("/", 1)[-1]
-    epoch = next((kv.split("=", 1)[1] for kv in qs.split("&") if kv.startswith("epoch=")), None)
+    quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
+    epoch = quals.get("epoch")
     evr = f"{epoch}:{ver}" if (ver and epoch) else (ver or None)
-    return name, evr, base_ver
+    return name, evr, base_ver, _mod_stream(quals.get("rpmmod"))
 
 
 def _name_from_id(pkgpart: str):
@@ -93,15 +104,15 @@ def _resolve(pid, cpe_by_id, purl_by_id, rel):
         plat_ref = pid.split(":", 1)[0]
     purl = purl_by_id.get(pkg_ref) if pkg_ref else None
     if purl and purl.startswith("pkg:rpm"):
-        name, evr, base = _from_purl(purl)
+        name, evr, base, stream = _from_purl(purl)
     else:
         pkgpart = pid.split(":", 1)[1] if ":" in pid else pid
-        name, evr = _name_from_id(pkgpart), None
+        name, evr, stream = _name_from_id(pkgpart), None, None
         base = f"pkg:rpm/redhat/{name}" if name else None
     # dist tag from the version is authoritative (gives the minor stream el9_2);
     # platform CPE is the fallback for no-version (known_affected) products.
     release = _dist_tag(evr) or _release(cpe_by_id.get(plat_ref))
-    return name, release, base, evr
+    return name, release, base, evr, stream
 
 
 def _status_of(pid, ps, fixstate_by_pid, mitig_by_pid, flag_by_pid):
@@ -163,18 +174,18 @@ def _file_rows(d: dict):
         status, status_raw, just = _status_of(pid, ps, fixstate_by_pid, mitig_by_pid, flag_by_pid)
         if not status:
             continue
-        name, release, base, evr = _resolve(pid, cpe_by_id, purl_by_id, rel)
+        name, release, base, evr, stream = _resolve(pid, cpe_by_id, purl_by_id, rel)
         if not name or name == "red_hat_products":   # vendor umbrella "all RH products", not a package
             continue
         fixed = evr if status == st.FIXED else None
-        key = (name, release, status, fixed)
+        key = (name, release, status, fixed, stream)   # stream in the key: keep per-stream rows apart
         if key in seen:
             continue
         seen.add(key)
         yield row(
             cve_id=cid, coord="purl", ecosystem="rpm", package=name, purl=base,
             release=release, introduced="0", fixed=fixed, version_scheme="rpm",
-            status=status, status_raw=status_raw, justification=just,
+            module_stream=stream, status=status, status_raw=status_raw, justification=just,
             source=SOURCE, status_source="own", origin=ORIGIN,
         )
 
