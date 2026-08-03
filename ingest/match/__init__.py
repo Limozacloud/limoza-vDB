@@ -435,6 +435,42 @@ def _cpe_verdict(installed, rows):
     return hits
 
 
+# ── Microsoft CPE editions ───────────────────────────────────────────────────────────────────
+# NVD/MSRC file some Microsoft products under BOTH a generic base product name (`sql_server`) and
+# year-suffixed names (`sql_server_2019`, `sql_server_2022`, …). Application catalogers (glance) emit
+# the GENERIC name with the build in the version field, so every edition-scoped CVE filed under a
+# suffixed name is silently missed — a SQL Server 2019 host on `sql_server:15.0.2000.5` never matches
+# the `sql_server_2019` rows (issue #44). SQL Server's editions map cleanly to the leading MAJOR
+# (2017/19/22/25 = 14/15/16/17), so we match the whole family scoped to the host's major — a 16.x fix
+# can never reach a 15.x host, so there is no cross-edition false positive.
+# Deliberately SQL-Server-only for now; the other split families need their own edition logic and are
+# NOT safe under a bare major key:
+#   - visual_studio: major is noisy (2019 rows carry majors 16/17/8; the generic product mixes
+#     11/12/14 and malformed builds) — a major key would cross-contaminate editions.
+#   - azure_devops_server: versioned by DATE builds (20230601.x), not a major at all.
+#   - office: editions are build-RANGES (16.0.5xxx=2016, 16.0.10xxx=2019, …), not a major.
+#   - windows_*: glance scans the exact release from the registry, so there is no generic name to
+#     miss (verified: a windows_server_2022 host matches its own rows, no FN).
+_MS_MAJOR_FAMILIES = ("sql_server",)
+
+
+def _ms_family(product):
+    """The Microsoft major-versioned family a CPE product belongs to (`sql_server_2019` → `sql_server`;
+    `sql_server` → `sql_server`), or None. Only the bare base or a `<base>_<year>` variant qualifies,
+    so `sql_server_management_studio` (a different product) stays out."""
+    for base in _MS_MAJOR_FAMILIES:
+        if product == base or re.match(re.escape(base) + r"_\d{4}$", product or ""):
+            return base
+    return None
+
+
+def _ms_major(version):
+    """Leading numeric component of a version — the edition key for a major-versioned MS family
+    (`15.0.2000.5` → '15'), or None."""
+    m = re.match(r"\s*(\d+)", version or "")
+    return m.group(1) if m else None
+
+
 def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
@@ -446,12 +482,27 @@ def match_cpe(conn, cpe, version=None, curations=None):
     if curations is None:
         curations = load_curations(conn)
     pkg = key.split(":")[4]
-    sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb "
-           "FROM affected WHERE coord = 'cpe' AND cpe23 = %s")
+    # Microsoft edition family: fetch the WHOLE family (generic + every year-suffixed sibling) and
+    # scope to the host's major below, so a generic-scanned host still matches the year-filed CVEs
+    # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.
+    fam = _ms_family(pkg)
+    host_major = _ms_major(version) if fam else None
+    cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
+            "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
+    if fam:                                            # prefix LIKE → uses the cpe23 index
+        sql, params = cols + "AND cpe23 LIKE %s", (":".join(key.split(":")[:4]) + ":" + fam + "%",)
+    else:
+        sql, params = cols + "AND cpe23 = %s", (key,)
     by_cve = {}
     with conn.cursor() as cur:
-        cur.execute(sql, (key,))
-        for cid, src, intro, fixed, last, scheme, status, kb in cur.fetchall():
+        cur.execute(sql, params)
+        for cid, src, intro, fixed, last, scheme, status, kb, product in cur.fetchall():
+            if fam:
+                if _ms_family(product) != fam:         # a real family sibling only (not …_studio)
+                    continue
+                rmaj = _ms_major(fixed) or _ms_major(intro)
+                if host_major and rmaj and rmaj != host_major:
+                    continue                           # foreign edition — different major line
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
