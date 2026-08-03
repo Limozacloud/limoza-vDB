@@ -253,6 +253,7 @@ _VARIANT_TAGS = (
     "_fips",      # FIPS-validated crypto (RHEL/Oracle) — epoch-bumped
     "ksplice",    # Oracle Ksplice live-patch stream
     "rhaos",      # Red Hat OpenShift (rhaos4.x) — its own podman/buildah/skopeo/cri-o/… builds
+    "module",     # RHEL AppStream module co-rebuild (.module+elN) — a non-module host never runs it
 )
 
 # Layered products & special kernels carry a dist tag of the form elN<letters>: el9ap (Ansible
@@ -426,6 +427,13 @@ def match(conn, purl, version=None, release=None, curations=None):
     if not rows and source_pkg and source_pkg != primary:
         rows = _fetch(source_pkg)        # source fallback (deb; or an rpm binary OVAL didn't test)
     host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
+    # Red Hat VEX: a per-binary `not_affected` ("vulnerable code not present") overrides the
+    # product-level "affected" statement for the same package. A module co-rebuild lists every rpm in
+    # the stream as affected, but Red Hat marks the ones without the vulnerable code not_affected —
+    # CVE-2026-4176 is affected on `perl` yet not_affected on every perl sub-module. Honour it so those
+    # bystanders (which carry only an unbounded "affected", no fix) are not flagged; a real fix row is
+    # untouched (a shipped fix already means the code was there).
+    not_affected = {cid for cid, *_r, status, _sr in rows if status == "not_affected"}
     findings = {}
     for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in rows:
         if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
@@ -437,6 +445,8 @@ def match(conn, purl, version=None, release=None, curations=None):
                             "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
         if ctx is None:
             continue                                              # suppressed by a curation rule
+        if ctx["status"] == "affected" and ctx["fixed"] is None and cid in not_affected:
+            continue                     # VEX not_affected overrides the co-rebuild "affected"
         if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
             findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
     return findings
