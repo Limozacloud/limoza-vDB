@@ -37,9 +37,21 @@ def _release(cpe: str | None):
 
 def _split_nvr(s: str):
     """'cluster-md-kmp-default-6.4.0-150700.53.34.1' → ('cluster-md-kmp-default',
-    '6.4.0-150700.53.34.1') ; 'kernel-source-azure' → ('kernel-source-azure', None)."""
+    '6.4.0-150700.53.34.1') ; 'kernel-source-azure' → ('kernel-source-azure', None).
+
+    SUSE multilib variants are named `<pkg>-32bit` / `-64bit`, and that arch token begins with a
+    digit — so the naive split captures `32bit-<version>` as the version and folds the variant into
+    the base package under a malformed EVR (`libopenssl1_1-32bit-1.1.1d-…` → name `libopenssl1_1`,
+    version `32bit-1.1.1d-…`). Such a version sorts ABOVE every real build, so it becomes a bogus
+    remediation and false-positives even a fully-patched host. Keep the arch token on the name."""
     m = re.match(r"^(.+?)-(\d.*)$", s)
-    return (m.group(1), m.group(2)) if m else (s, None)
+    if not m:
+        return s, None
+    name, ver = m.group(1), m.group(2)
+    m2 = re.match(r"^(32bit|64bit)-(\d.*)$", ver)
+    if m2:
+        return f"{name}-{m2.group(1)}", m2.group(2)
+    return name, ver
 
 
 def _resolve(pid, cpe_by_id, rel):
