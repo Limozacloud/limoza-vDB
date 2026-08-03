@@ -290,6 +290,81 @@ def _mod_stream(rpmmod):
     return ":".join(parts[:2]) if len(parts) >= 2 and parts[0] and parts[1] else None
 
 
+# ── SUSE / SLE ─────────────────────────────────────────────────────────────────────────────
+# SUSE is a wholly separate RPM world from the RHEL family and the matcher had no lane for it:
+# `_rpm_streams` only understands `.elN` dist tags + RHEL distros, so a SLES host resolved to
+# release=None → the deb/ecosystem `release IS NULL` catch-all. That fetched the wrong pool — it
+# dropped every correctly-released SLES row (they carry `sles15sp3`, `sle-module-…`, …) and let in
+# the release-less noise, so a SLES-15.3 `libopenssl1_1` fell back to the SOURCE `openssl` and
+# matched SUSE Liberty Linux (`sll*`, SUSE's RHEL REBUILD — `.el` versions) → a bogus
+# `3.5.5-4.el10_2` remediation. SUSE needs its own scoping:
+#   • the maintenance CODESTREAM in the EVR (`…-150200.11.103.1` → 150200) is the authoritative
+#     comparison key. A fix is only comparable to a host on the SAME codestream; `sll*`/`.el` builds
+#     and cross-SP `150400` builds carry a different one (or none) and drop out.
+#   • Within a codestream, base and the extended-support lanes (LTSS / SAP / HPC / RT / …) share ONE
+#     monotonically increasing build sequence — base `sles15sp3` ends at -150200.11.51.1, then
+#     `sles-ltss15sp3` CONTINUES the SAME sequence to .75, .97, .103. So a host's own build number
+#     alone places it: a `.103.1` host has every fix up to .103 regardless of which lane's label
+#     carries it. We therefore INCLUDE the extended-support lanes (unlike RHEL EUS, whose minor
+#     streams have independent numbering) and let the build compare decide.
+#   • A SUSE `known_affected` with no fix means "no fix on the BASE lane" — but the same CVE is
+#     usually fixed on LTSS. A host at an LTSS build is patched, so an open `affected` row is
+#     honoured only when the CVE has NO reachable fix in scope (see `suse_patched` in match()).
+#   • SLL (RHEL rebuild), SLED (desktop), SES (storage), Leap/Tumbleweed, CaaSP, MicroOS, SUSE
+#     Manager are DIFFERENT products, not a SLES host's lanes.
+_SUSE_HOST_RE = re.compile(r"^(?:sles|sled|sle[-_]|suse|opensuse|leap|caasp|tumbleweed)", re.I)
+_SUSE_CS_RE = re.compile(r"-(\d{6})\.\d")          # SLE maintenance codestream: -150200.11.103.1
+_SUSE_MAJSP_RE = re.compile(r"(\d+)(?:[.\-]?(?:sp)?(\d+))?\s*$", re.I)   # trailing major(+sp)
+
+
+def _is_suse(distro, namespace, version):
+    """True when the component is a SUSE/SLE host — by distro/namespace or a SUSE codestream EVR."""
+    return bool(_SUSE_HOST_RE.match(distro or "") or _SUSE_HOST_RE.match(namespace or "")
+                or _SUSE_CS_RE.search(version or ""))
+
+
+def _suse_cs(evr):
+    """The SLE maintenance codestream in an EVR (`1.1.1d-150200.11.103.1` → '150200'), or None
+    for a non-SUSE build (`3.5.5-4.el10_2` → None)."""
+    m = _SUSE_CS_RE.search(evr or "")
+    return m.group(1) if m else None
+
+
+def _suse_majsp(s):
+    """(major, sp) from a SUSE distro or release lane: 'sles-15.3' → ('15','3');
+    'sle-module-basesystem15sp3' → ('15','3'); 'sles15' → ('15', None)."""
+    m = _SUSE_MAJSP_RE.search(s or "")
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def _suse_family(lane, host_prod):
+    """True when the SUSE release lane belongs to the host's product family. `sll*` (RHEL rebuild),
+    `suse-manager-*`, `suse-microos*`, `leap*`, `ses*`, `caasp*`, openSUSE and Tumbleweed are
+    different products (none start with `sle`); a SLES host runs the `sle*`/`sles*` server family
+    incl. its LTSS/SAP/HPC extended-support lanes, plus the shared `sle-module-*`; SLED (desktop)
+    is its own product."""
+    l = (lane or "").lower()
+    if l.startswith("sle-module-"):
+        return True                                  # modules are shared across SLE products
+    if not l.startswith("sle"):
+        return False                                 # sll / suse-* / leap / ses / caasp / … — other
+    return l.startswith("sled") == (host_prod == "sled")
+
+
+def _suse_scope(lane, fixed, host_prod, host_maj, host_cs):
+    """Is a SUSE affected row in scope for the host? Same product family, same SLE major, and — for
+    a fix — the host's build codestream (`…-150200.…`). Extended-support lanes are IN scope; the
+    build number compare (and `suse_patched`) does the rest."""
+    if not _suse_family(lane, host_prod):
+        return False
+    lmaj, _lsp = _suse_majsp(lane)
+    if host_maj and lmaj and lmaj != host_maj:
+        return False
+    if fixed and host_cs and _suse_cs(fixed) != host_cs:
+        return False
+    return True
+
+
 def _lane(ptype, version, quals, release=None):
     """→ (ecosystem, release) for the affected lookup. `release` may be a list (rpm streams)."""
     if ptype == "rpm":
@@ -414,13 +489,23 @@ def match(conn, purl, version=None, release=None, curations=None):
               if ptype in ("rpm", "deb") else None)
     primary = binary or name.lower()
     source_pkg = (quals.get("upstream") or "").lower()
+    # SUSE/SLE hosts get their own lane (codestream + support-line scoping below); they are not part
+    # of the RHEL-family elN pool and must never be vendor-scoped to it.
+    suse = ptype == "rpm" and _is_suse(release or quals.get("distro"), namespace, version)
+    host_cs = _suse_cs(version) if suse else None
+    _hd = (release or quals.get("distro") or namespace or "").lower()
+    host_prod = "sled" if _hd.startswith("sled") else "sles"
+    host_maj = _suse_majsp(release or quals.get("distro") or "")[0] if suse else None
     # rpm: scope the shared elN pool to the host's own vendor (+ RH baseline) so a clone's
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
-    sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
+    sources = _rpm_sources(release or quals.get("distro"), namespace) if (ptype == "rpm" and not suse) else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
             "version_scheme, status, status_raw, module_stream FROM affected "
             "WHERE ecosystem = %s AND lower(package) = %s ")
-    if isinstance(rel, list):                       # rpm → match the major + minor streams
+    if suse:                                         # SUSE → fetch its own rows; never the RHEL-
+        #   rebuild `sll*` product nor the release-less noise. Precise scoping is done per-row below.
+        tail, extra = "AND source = 'suse' AND release IS NOT NULL AND release NOT LIKE 'sll%%'", ()
+    elif isinstance(rel, list):                     # rpm → match the major + minor streams
         tail, extra = "AND release = ANY(%s)", (rel,)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
             tail, extra = tail + " AND source = ANY(%s)", extra + (sources,)
@@ -450,6 +535,18 @@ def match(conn, purl, version=None, release=None, curations=None):
     # bystanders (which carry only an unbounded "affected", no fix) are not flagged; a real fix row is
     # untouched (a shipped fix already means the code was there).
     not_affected = {r[0] for r in rows if r[7] == "not_affected"}   # r[0]=cve_id, r[7]=status
+    # SUSE: a host that MEETS a reachable fix (its build >= a same-codestream fix) is patched, even
+    # when the base lane also carries a fix-less `known_affected` for that CVE (base support ended,
+    # LTSS shipped the fix). Collect those CVEs so the open `affected` rows in the loop don't
+    # re-flag an already-patched host.
+    suse_patched = set()
+    if suse:
+        for r in rows:
+            if not r[4] or not _suse_scope(r[2], r[4], host_prod, host_maj, host_cs):
+                continue                                          # r[2]=release, r[4]=fixed
+            hv, fv = _v(r[6], _strip_epoch(version)), _v(r[6], _strip_epoch(r[4]))   # r[6]=scheme
+            if hv is not None and fv is not None and hv >= fv:
+                suse_patched.add(r[0])
     findings = {}
     for cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream in rows:
         if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
@@ -458,6 +555,11 @@ def match(conn, purl, version=None, release=None, curations=None):
             continue                     # foreign parallel line (fips/ksplice) — never the host's
         if host_stream and mstream and mstream != host_stream:
             continue                     # foreign module stream (nodejs:14 vs the host's :18) — #35
+        if suse:
+            if not _suse_scope(rel_row, fixed, host_prod, host_maj, host_cs):
+                continue                 # foreign SUSE product / major / codestream
+            if status == "affected" and fixed is None and cid in suse_patched:
+                continue                 # base "known_affected" but host meets an LTSS/SAP fix
         ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
                             "release": rel_row, "source": src, "status": status,
                             "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
