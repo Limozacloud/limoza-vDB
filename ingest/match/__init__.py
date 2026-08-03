@@ -280,6 +280,16 @@ def _variant(evr):
     return m.group(0) if m else None
 
 
+def _mod_stream(rpmmod):
+    """AppStream module identity `name:stream` from glance's `rpmmod` qualifier value
+    (`nodejs:18:9070…:rhel9` → `nodejs:18`), or None. Only name:stream is compared — the
+    version:context tail differs per rebuild and must not enter the match (issue #35)."""
+    if not rpmmod:
+        return None
+    parts = rpmmod.split(":")
+    return ":".join(parts[:2]) if len(parts) >= 2 and parts[0] and parts[1] else None
+
+
 def _lane(ptype, version, quals, release=None):
     """→ (ecosystem, release) for the affected lookup. `release` may be a list (rpm streams)."""
     if ptype == "rpm":
@@ -408,7 +418,7 @@ def match(conn, purl, version=None, release=None, curations=None):
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if ptype == "rpm" else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
-            "version_scheme, status, status_raw FROM affected "
+            "version_scheme, status, status_raw, module_stream FROM affected "
             "WHERE ecosystem = %s AND lower(package) = %s ")
     if isinstance(rel, list):                       # rpm → match the major + minor streams
         tail, extra = "AND release = ANY(%s)", (rel,)
@@ -427,19 +437,27 @@ def match(conn, purl, version=None, release=None, curations=None):
     if not rows and source_pkg and source_pkg != primary:
         rows = _fetch(source_pkg)        # source fallback (deb; or an rpm binary OVAL didn't test)
     host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
+    # AppStream module stream (nodejs:18, php:8.0) from glance's `rpmmod` qualifier. The streams are
+    # parallel, independently maintained lines — a host on nodejs:10 must NOT be flagged against a
+    # nodejs:12/24 fix (`10.x < 24.x`, both `.module`). A module fix is only comparable to a host on
+    # the SAME stream. Dormant when absent: a non-modular host (or glance not yet emitting rpmmod)
+    # has no stream → no filtering, current behaviour (issue #35).
+    host_stream = _mod_stream(quals.get("rpmmod"))
     # Red Hat VEX: a per-binary `not_affected` ("vulnerable code not present") overrides the
     # product-level "affected" statement for the same package. A module co-rebuild lists every rpm in
     # the stream as affected, but Red Hat marks the ones without the vulnerable code not_affected —
     # CVE-2026-4176 is affected on `perl` yet not_affected on every perl sub-module. Honour it so those
     # bystanders (which carry only an unbounded "affected", no fix) are not flagged; a real fix row is
     # untouched (a shipped fix already means the code was there).
-    not_affected = {cid for cid, *_r, status, _sr in rows if status == "not_affected"}
+    not_affected = {r[0] for r in rows if r[7] == "not_affected"}   # r[0]=cve_id, r[7]=status
     findings = {}
-    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw in rows:
+    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream in rows:
         if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
             continue
         if (rv := _variant(fixed)) is not None and rv != host_var:
             continue                     # foreign parallel line (fips/ksplice) — never the host's
+        if host_stream and mstream and mstream != host_stream:
+            continue                     # foreign module stream (nodejs:14 vs the host's :18) — #35
         ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
                             "release": rel_row, "source": src, "status": status,
                             "fixed": fixed, "introduced": intro, "last_affected": last}, curations)

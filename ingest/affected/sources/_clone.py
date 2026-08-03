@@ -23,7 +23,7 @@ from ingest.affected import row
 
 _MAJ = re.compile(r"el(\d+)")
 _SELECT = """SELECT cve_id, ecosystem, package, release, introduced, fixed,
-                    last_affected, version_scheme, status, status_raw, justification
+                    last_affected, version_scheme, module_stream, status, status_raw, justification
              FROM affected WHERE origin = 'redhat' AND release IS NOT NULL"""
 
 
@@ -33,14 +33,14 @@ def inherit(source: str, min_major: int | None = None):
         with rconn.cursor(name=f"rh_inherit_{source}") as cur:
             cur.itersize = 20_000
             cur.execute(_SELECT)
-            for (cid, eco, pkg, rel, intro, fixed, last, scheme, status, sraw, just) in cur:
+            for (cid, eco, pkg, rel, intro, fixed, last, scheme, mstream, status, sraw, just) in cur:
                 if min_major:
                     m = _MAJ.search(rel or "")
                     if not m or int(m.group(1)) < min_major:
                         continue
                 yield row(cve_id=cid, coord="purl", ecosystem=eco, package=pkg,
                           purl=f"pkg:rpm/{source}/{pkg}", release=rel, introduced=intro,
-                          fixed=fixed, last_affected=last, version_scheme=scheme,
+                          fixed=fixed, last_affected=last, version_scheme=scheme, module_stream=mstream,
                           status=status, status_raw=sraw, justification=just,
                           source=source, status_source="redhat-inherited", origin=source)
     finally:
