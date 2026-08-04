@@ -116,7 +116,7 @@ def _resolve(pid, cpe_by_id, purl_by_id, rel):
     # platforms (the latter are the version-tag-scoped base rows).
     plat_cpe = cpe_by_id.get(plat_ref)
     if plat_cpe and not _BASE_PLATFORM.search(plat_cpe):
-        return None, None, None, None
+        return None, None, None, None, None   # 5-tuple: matches the (name, release, base, evr, stream) unpack
     purl = purl_by_id.get(pkg_ref) if pkg_ref else None
     if purl and purl.startswith("pkg:rpm"):
         name, evr, base, stream = _from_purl(purl)
