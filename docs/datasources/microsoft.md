@@ -67,10 +67,14 @@ Microsoft patches by **build number**, not package version. The `microsoft` extr
 - **SharePoint editions.** MSRC's `sharepoint_server_2016` and `sharepoint_server_2019`
   product names are normalised to the NVD/scanner identity `sharepoint_server`. Because
   SharePoint 2016, 2019 and Subscription Edition all use version major `16.0`, the matcher
-  derives the edition from Microsoft's distinct build bands and compares a host only with
-  fixes for its own edition. After deploying a change to this normalisation, rebuild the
-  Microsoft slice with `vdb affected microsoft` so the previously dropped edition rows are
-  materialised.
+  derives the edition from classifier boundaries between Microsoft's distinct build series and
+  compares a host only with fixes for its own edition. The classifier deliberately closes unused
+  gaps between published series; `10000` and `14000` are internal boundaries, not Microsoft RTM
+  builds. Matching requires the full four-component build (`16.0.5552.1002`), because a partial
+  build or marketing year cannot identify the edition safely. A repository build is considered an
+  applicable remediation only when it belongs to the installed SharePoint edition. After deploying
+  a change to this normalisation, rebuild the Microsoft slice with `vdb affected microsoft` so the
+  previously dropped edition rows are materialised.
 - **Rolling products.** Single rolling products with no parallel versions or back-ports
   (Visual Studio Code, Edge) are matched cumulatively — any build below the fix is affected —
   rather than scoped to a `major.minor` line (which suits parallel products like SQL Server,

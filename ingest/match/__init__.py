@@ -491,25 +491,42 @@ def _ms_family_products(fam, host_major):
     return prods
 
 
-def _sharepoint_edition(build):
-    '''Return the supported SharePoint edition encoded by a 16.0 build.
+_SHAREPOINT_BUILD = re.compile(r'\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*')
+# Classifier boundaries, not Microsoft RTM builds. Published series have unused gaps; closing them
+# keeps every valid 16.0 build edition-scoped instead of falling back to the cross-edition row pool.
+_SHAREPOINT_2019_BOUNDARY = 10000
+_SHAREPOINT_SUBSCRIPTION_BOUNDARY = 14000
 
-    SharePoint 2016, 2019 and Subscription Edition all use the same CPE product and the same
-    16.0 major, but occupy separate build bands (2016 = 16.0.4xxx-5xxx, 2019 = 16.0.10xxx,
-    Subscription Edition = 16.0.14326+). The bands are contiguous, so every 16.0 build maps to
-    exactly one edition: no Microsoft fix build falls between them, and a host is never left
-    cross-edition-scoped. A non-16.0 major (2013 = 15.0.x, 2010 = 14.0.x) returns None and is
-    handled by the ordinary version compare.
+
+def _sharepoint_build_parts(build):
+    """A full four-component SharePoint build as integer parts, or None."""
+    m = _SHAREPOINT_BUILD.fullmatch(build or '')
+    return tuple(map(int, m.groups())) if m else None
+
+
+def _sharepoint_edition(build):
+    '''Return the supported edition encoded by a full SharePoint 16.0 build, or None.
+
+    These closed, inferred ranges are classifier boundaries, not Microsoft RTM builds. A non-16.0
+    build (2013 = 15.0.x, 2010 = 14.0.x) is handled by the ordinary version compare.
     '''
-    m = re.match(r'\s*16\.0\.(\d+)(?:\.|$)', build or '')
-    if not m:
+    parts = _sharepoint_build_parts(build)
+    if not parts or parts[:2] != (16, 0):
         return None
-    build_line = int(m.group(1))
-    if build_line < 10000:
+    build_line = parts[2]
+    if build_line < _SHAREPOINT_2019_BOUNDARY:
         return '2016'
-    if build_line < 14000:
+    if build_line < _SHAREPOINT_SUBSCRIPTION_BOUNDARY:
         return '2019'
     return 'subscription'
+
+
+def _sharepoint_product_line(build):
+    """Comparable SharePoint product line for repository-version applicability checks."""
+    parts = _sharepoint_build_parts(build)
+    if not parts:
+        return None
+    return _sharepoint_edition(build) or f'{parts[0]}.{parts[1]}'
 
 
 def match_cpe(conn, cpe, version=None, curations=None):
@@ -520,9 +537,16 @@ def match_cpe(conn, cpe, version=None, curations=None):
         raise ValueError("not a cpe 2.3 string")
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
+    pkg = key.split(":")[4]
+    if pkg == 'sharepoint_server':
+        # The generic CPE does not carry the 2016 / 2019 / Subscription identity. A partial or
+        # marketing-year version cannot select an edition and must be "unknown", never compared
+        # against the pooled rows (16.0 would otherwise surface an arbitrary 2016 remediation).
+        if _sharepoint_build_parts(version) is None:
+            raise ValueError("SharePoint matching requires a full four-component build (for example 16.0.5552.1002)")
+        version = version.strip()
     if curations is None:
         curations = load_curations(conn)
-    pkg = key.split(":")[4]
     # Microsoft edition family: fetch the WHOLE family (generic + every year-suffixed sibling) and
     # scope to the host's major below, so a generic-scanned host still matches the year-filed CVEs
     # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.

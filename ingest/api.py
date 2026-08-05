@@ -29,7 +29,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.core.db import get_conn
-from ingest.match import load_curations, match, parse_cpe, parse_purl, remediation
+from ingest.match import (_sharepoint_product_line, load_curations, match, parse_cpe,
+                          parse_purl, remediation)
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -121,6 +122,20 @@ def _bulk_match(components: list) -> list:
                 extra["repository_version"] = repo_ver
                 extra["repo_fixed_cves"] = []
                 if entry.get("cves"):
+                    sharepoint_line_mismatch = False
+                    if ident.startswith("cpe:"):
+                        cpe_key, _ = parse_cpe(ident)
+                        if cpe_key and cpe_key.split(":")[4] == "sharepoint_server":
+                            sharepoint_line_mismatch = (
+                                _sharepoint_product_line(ver) != _sharepoint_product_line(repo_ver))
+                    if sharepoint_line_mismatch:
+                        # The generic SharePoint CPE is shared by 2016, 2019 and Subscription
+                        # Edition. A foreign edition's repository build is not an applicable
+                        # upgrade even when independently matching it makes the CVE disappear.
+                        entry = {**entry, "cves": [{**cv, "repo_fixable": False}
+                                                   for cv in entry["cves"]]}
+                        results.append({"component": ident, "version": ver, **entry, **extra})
+                        continue
                     rk = (ident, repo_ver, rel)
                     if rk not in repo_cache:
                         try:
