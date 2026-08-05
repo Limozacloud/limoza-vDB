@@ -491,6 +491,44 @@ def _ms_family_products(fam, host_major):
     return prods
 
 
+_SHAREPOINT_BUILD = re.compile(r'\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*')
+# Classifier boundaries, not Microsoft RTM builds. Published series have unused gaps; closing them
+# keeps every valid 16.0 build edition-scoped instead of falling back to the cross-edition row pool.
+_SHAREPOINT_2019_BOUNDARY = 10000
+_SHAREPOINT_SUBSCRIPTION_BOUNDARY = 14000
+
+
+def _sharepoint_build_parts(build):
+    """A full four-component SharePoint build as integer parts, or None."""
+    m = _SHAREPOINT_BUILD.fullmatch(build or '')
+    return tuple(map(int, m.groups())) if m else None
+
+
+def _sharepoint_edition(build):
+    '''Return the supported edition encoded by a full SharePoint 16.0 build, or None.
+
+    These closed, inferred ranges are classifier boundaries, not Microsoft RTM builds. A non-16.0
+    build (2013 = 15.0.x, 2010 = 14.0.x) is handled by the ordinary version compare.
+    '''
+    parts = _sharepoint_build_parts(build)
+    if not parts or parts[:2] != (16, 0):
+        return None
+    build_line = parts[2]
+    if build_line < _SHAREPOINT_2019_BOUNDARY:
+        return '2016'
+    if build_line < _SHAREPOINT_SUBSCRIPTION_BOUNDARY:
+        return '2019'
+    return 'subscription'
+
+
+def _sharepoint_product_line(build):
+    """Comparable SharePoint product line for repository-version applicability checks."""
+    parts = _sharepoint_build_parts(build)
+    if not parts:
+        return None
+    return _sharepoint_edition(build) or f'{parts[0]}.{parts[1]}'
+
+
 def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
@@ -499,14 +537,22 @@ def match_cpe(conn, cpe, version=None, curations=None):
         raise ValueError("not a cpe 2.3 string")
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
+    pkg = key.split(":")[4]
+    if pkg == 'sharepoint_server':
+        # The generic CPE does not carry the 2016 / 2019 / Subscription identity. A partial or
+        # marketing-year version cannot select an edition and must be "unknown", never compared
+        # against the pooled rows (16.0 would otherwise surface an arbitrary 2016 remediation).
+        if _sharepoint_build_parts(version) is None:
+            raise ValueError("SharePoint matching requires a full four-component build (for example 16.0.5552.1002)")
+        version = version.strip()
     if curations is None:
         curations = load_curations(conn)
-    pkg = key.split(":")[4]
     # Microsoft edition family: fetch the WHOLE family (generic + every year-suffixed sibling) and
     # scope to the host's major below, so a generic-scanned host still matches the year-filed CVEs
     # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.
     fam = _ms_family(pkg)
     host_major = _ms_major(version) if fam else None
+    host_sharepoint_edition = _sharepoint_edition(version) if pkg == 'sharepoint_server' else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
     if fam:                                            # exact sibling keys → index scan (not LIKE)
@@ -525,6 +571,10 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 rmaj = _ms_major(fixed) or _ms_major(intro)
                 if host_major and rmaj and rmaj != host_major:
                     continue                           # foreign edition — different major line
+            if host_sharepoint_edition:
+                fixed_sharepoint_edition = _sharepoint_edition(fixed)
+                if fixed_sharepoint_edition and fixed_sharepoint_edition != host_sharepoint_edition:
+                    continue                           # foreign SharePoint edition (2016 / 2019 / SE)
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)

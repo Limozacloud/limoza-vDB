@@ -60,6 +60,13 @@ def _resolve(part, vendor, product, update):
     stripped = re.sub(r"_\d+(?=_)", "", product)
     if stripped != product:
         cands.append((stripped, upd))
+    # MSRC names the supported SharePoint editions `sharepoint_server_2016` / `_2019`, while
+    # NVD and scanners use the shared `sharepoint_server` product (the edition lives outside the
+    # product field). Keep this SharePoint-only and last-resort: products whose year-suffixed name
+    # exists in NVD (for example sql_server_2019 and office_2019) must retain their exact identity.
+    sharepoint = re.fullmatch(r'(sharepoint_server)_(?:2016|2019)', product)
+    if sharepoint:
+        cands.append((sharepoint.group(1), upd))
     if _VP is not None:
         for prod, u in cands:
             if u and (vendor, prod, u) in _VPU:
