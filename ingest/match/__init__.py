@@ -452,6 +452,12 @@ def _cpe_verdict(installed, rows):
 #   - windows_*: glance scans the exact release from the registry, so there is no generic name to
 #     miss (verified: a windows_server_2022 host matches its own rows, no FN).
 _MS_MAJOR_FAMILIES = ("sql_server",)
+# SQL Server release major → marketing year, the exact `<base>_<year>` product NVD files edition CVEs
+# under. Used to look those rows up by EXACT cpe23 key (index scan) instead of a `LIKE base%` prefix:
+# the affected.cpe23 btree is a default-collation index, so `LIKE 'prefix%'` does NOT use it and falls
+# back to a full 14M-row seq scan (~40s per Microsoft match). Enumerating the host's two concrete
+# products (generic base + its year edition) keeps the lookup on the index.
+_MS_SQL_YEAR = {"13": "2016", "14": "2017", "15": "2019", "16": "2022", "17": "2025"}
 
 
 def _ms_family(product):
@@ -469,6 +475,20 @@ def _ms_major(version):
     (`15.0.2000.5` → '15'), or None."""
     m = re.match(r"\s*(\d+)", version or "")
     return m.group(1) if m else None
+
+
+def _ms_family_products(fam, host_major):
+    """The concrete CPE product names to look up for a Microsoft edition family on a host of the given
+    major: the generic base plus the host major's year edition (`sql_server` + `sql_server_2019` for
+    major 15). Both are exact names so the lookup stays on the cpe23 index; the generic rows are
+    still major-filtered per-row in match_cpe (they mix majors), the year edition is inherently
+    single-major."""
+    prods = [fam]
+    if fam == "sql_server":
+        yr = _MS_SQL_YEAR.get(host_major or "")
+        if yr:
+            prods.append(f"{fam}_{yr}")
+    return prods
 
 
 def match_cpe(conn, cpe, version=None, curations=None):
@@ -489,8 +509,10 @@ def match_cpe(conn, cpe, version=None, curations=None):
     host_major = _ms_major(version) if fam else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
-    if fam:                                            # prefix LIKE → uses the cpe23 index
-        sql, params = cols + "AND cpe23 LIKE %s", (":".join(key.split(":")[:4]) + ":" + fam + "%",)
+    if fam:                                            # exact sibling keys → index scan (not LIKE)
+        p = key.split(":")
+        fam_keys = [":".join(p[:4] + [prod] + p[5:]) for prod in _ms_family_products(fam, host_major)]
+        sql, params = cols + "AND cpe23 = ANY(%s)", (fam_keys,)
     else:
         sql, params = cols + "AND cpe23 = %s", (key,)
     by_cve = {}
