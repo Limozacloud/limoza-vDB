@@ -491,6 +491,30 @@ def _ms_family_products(fam, host_major):
     return prods
 
 
+# SharePoint editions all share the CPE product `sharepoint_server` and glance scans them generically
+# (edition fields `*`), so the edition can only be read off the BUILD: SharePoint 2016 = 16.0.4xxx–5xxx,
+# 2019 = 16.0.10xxx, Subscription Edition = 16.0.14xxx+. MSRC fixes each edition at its own build
+# (CVE-2026-58644: 2016→16.0.5556, 2019→16.0.10417, SE→16.0.19725). Without scoping, all three fix
+# rows land in one CVE group and a host is compared cross-edition: a fully-patched 2016 host
+# (16.0.5561) reads as vulnerable against the SE build (16.0.19725) → false positive, and a 2019 host
+# below its own fix but above the 2016 fix would be missed → false negative. Match only within the
+# host's own edition band. (2013 = 15.0.x / 2010 = 14.0.x are separate majors, handled by the compare.)
+def _sharepoint_edition(build):
+    """SharePoint edition band from a build (`16.0.5561.1001` → '2016'), or None outside the known
+    16.0 bands (a different major, or an unrecognised range → no scoping)."""
+    m = re.match(r"16\.0\.(\d+)", build or "")
+    if not m:
+        return None
+    mmmm = int(m.group(1))
+    if mmmm < 6000:
+        return "2016"
+    if 10000 <= mmmm < 14000:
+        return "2019"
+    if mmmm >= 14000:
+        return "se"
+    return None
+
+
 def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
@@ -507,6 +531,7 @@ def match_cpe(conn, cpe, version=None, curations=None):
     # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.
     fam = _ms_family(pkg)
     host_major = _ms_major(version) if fam else None
+    host_sp = _sharepoint_edition(version) if pkg == "sharepoint_server" else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
     if fam:                                            # exact sibling keys → index scan (not LIKE)
@@ -525,6 +550,8 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 rmaj = _ms_major(fixed) or _ms_major(intro)
                 if host_major and rmaj and rmaj != host_major:
                     continue                           # foreign edition — different major line
+            if host_sp and (fe := _sharepoint_edition(fixed)) and fe != host_sp:
+                continue                               # foreign SharePoint edition (2016 vs 2019 vs SE)
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)

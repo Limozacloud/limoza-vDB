@@ -60,6 +60,15 @@ def _resolve(part, vendor, product, update):
     stripped = re.sub(r"_\d+(?=_)", "", product)
     if stripped != product:
         cands.append((stripped, upd))
+    # Trailing-year products where NVD has ONLY the generic name: MSRC stamps SharePoint editions as
+    # sharepoint_server_2016 / _2019, but the catalog carries just sharepoint_server (the year/edition
+    # lives in NVD's version+edition fields, which _key drops). Fall back to the year-stripped form —
+    # but only as the LAST candidate, so a year product NVD DOES keep (sql_server_2019, office_2019)
+    # still resolves to itself via the exact candidate first. The edition stays recoverable downstream
+    # from the fixed build number (16.0.5xxx=2016, 10xxx=2019, 14xxx+=SE).
+    yearless = re.sub(r"_(?:19|20)\d{2}$", "", product)
+    if yearless != product:
+        cands.append((yearless, upd))
     if _VP is not None:
         for prod, u in cands:
             if u and (vendor, prod, u) in _VPU:
