@@ -491,6 +491,27 @@ def _ms_family_products(fam, host_major):
     return prods
 
 
+def _sharepoint_edition(build):
+    '''Return the supported SharePoint edition encoded by a 16.0 build.
+
+    SharePoint 2016, 2019 and Subscription Edition all use the same CPE product and the same
+    16.0 major, but occupy separate build bands (2016 = 16.0.4xxx-5xxx, 2019 = 16.0.10xxx,
+    Subscription Edition = 16.0.14326+). The bands are contiguous, so every 16.0 build maps to
+    exactly one edition: no Microsoft fix build falls between them, and a host is never left
+    cross-edition-scoped. A non-16.0 major (2013 = 15.0.x, 2010 = 14.0.x) returns None and is
+    handled by the ordinary version compare.
+    '''
+    m = re.match(r'\s*16\.0\.(\d+)(?:\.|$)', build or '')
+    if not m:
+        return None
+    build_line = int(m.group(1))
+    if build_line < 10000:
+        return '2016'
+    if build_line < 14000:
+        return '2019'
+    return 'subscription'
+
+
 def match_cpe(conn, cpe, version=None, curations=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
@@ -507,6 +528,7 @@ def match_cpe(conn, cpe, version=None, curations=None):
     # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.
     fam = _ms_family(pkg)
     host_major = _ms_major(version) if fam else None
+    host_sharepoint_edition = _sharepoint_edition(version) if pkg == 'sharepoint_server' else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
     if fam:                                            # exact sibling keys → index scan (not LIKE)
@@ -525,6 +547,10 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 rmaj = _ms_major(fixed) or _ms_major(intro)
                 if host_major and rmaj and rmaj != host_major:
                     continue                           # foreign edition — different major line
+            if host_sharepoint_edition:
+                fixed_sharepoint_edition = _sharepoint_edition(fixed)
+                if fixed_sharepoint_edition and fixed_sharepoint_edition != host_sharepoint_edition:
+                    continue                           # foreign SharePoint edition (2016 / 2019 / SE)
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
