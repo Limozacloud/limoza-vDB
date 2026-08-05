@@ -492,27 +492,45 @@ def _ms_family_products(fam, host_major):
 
 
 # SharePoint editions all share the CPE product `sharepoint_server` and glance scans them generically
-# (edition fields `*`), so the edition can only be read off the BUILD: SharePoint 2016 = 16.0.4xxx–5xxx,
-# 2019 = 16.0.10xxx, Subscription Edition = 16.0.14xxx+. MSRC fixes each edition at its own build
-# (CVE-2026-58644: 2016→16.0.5556, 2019→16.0.10417, SE→16.0.19725). Without scoping, all three fix
-# rows land in one CVE group and a host is compared cross-edition: a fully-patched 2016 host
-# (16.0.5561) reads as vulnerable against the SE build (16.0.19725) → false positive, and a 2019 host
-# below its own fix but above the 2016 fix would be missed → false negative. Match only within the
-# host's own edition band. (2013 = 15.0.x / 2010 = 14.0.x are separate majors, handled by the compare.)
-def _sharepoint_edition(build):
-    """SharePoint edition band from a build (`16.0.5561.1001` → '2016'), or None outside the known
-    16.0 bands (a different major, or an unrecognised range → no scoping)."""
-    m = re.match(r"16\.0\.(\d+)", build or "")
-    if not m:
-        return None
-    mmmm = int(m.group(1))
-    if mmmm < 6000:
-        return "2016"
-    if 10000 <= mmmm < 14000:
-        return "2019"
-    if mmmm >= 14000:
-        return "se"
-    return None
+# (edition fields `*`), so the edition can only be read off the BUILD. MSRC fixes each edition at its
+# own build on its own version line (CVE-2026-58644: 2016→16.0.5556, 2019→16.0.10417, SE→16.0.19725).
+# Without scoping, all three fix rows land in one CVE group and a host is compared cross-edition: a
+# fully-patched 2016 host (16.0.5561) reads as vulnerable against the SE build (16.0.19725) → false
+# positive, and a 2019 host below its own fix but above the 2016 fix would be missed → false negative.
+#
+# The edition is not read from a hardcoded build→range table (a maintenance point on every new
+# edition) — it is derived from the fix builds PER CVE. Within one CVE MSRC lists exactly one fix per
+# affected edition, and those builds sit thousands apart on their separate version lines (58644:
+# 16.0.5556 / 16.0.10417 / 16.0.19725), so a per-CVE gap split cleanly separates them with no
+# intra-edition noise (the global build set is messy — SE spreads 16.0.14xxx-19xxx and overlaps 2019
+# near the boundary — so a global clustering is NOT reliable; per-CVE is). A host is bucketed into the
+# same-gap band as the fix on its own line and compared only against that fix; a brand-new edition
+# forms its own band automatically. `_SP_GAP` need only sit between an intra-line patch step (tens)
+# and an inter-edition jump (thousands).
+_SP_GAP = 2000
+
+
+def _sp_key(build):
+    """SharePoint build → a monotone edition key (`16.0.5561.1001` → 16005561), or None. major·10^6 +
+    3rd component (the minor is always 0), so 2016/2019/SE (major 16) and 2013/2010 (15/14) all sort
+    onto one axis."""
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", build or "")
+    return int(m.group(1)) * 1_000_000 + int(m.group(3)) if m else None
+
+
+def _sp_scope(host_build, fix_keys):
+    """The host's edition band and the band boundaries, from a per-CVE gap split of `fix_keys`.
+    The boundary sits just above the lower edition's fix (`a + _SP_GAP`), NOT at the midpoint: an
+    edition's build range can be wide and start well below its fix in a given CVE (SE RTM 16.0.14326
+    but SE fixed at 16.0.19725 in 58644), so a midpoint boundary would misfile an early host of the
+    upper edition into the lower one. Placing it a patch-step above the lower fix keeps a patched
+    lower-edition host in its own band while the whole upper edition (which begins thousands higher)
+    stays above the boundary. Returns (host_band, boundaries)."""
+    ks = sorted(set(fix_keys))
+    bounds = [a + _SP_GAP for a, b in zip(ks, ks[1:]) if b - a > _SP_GAP]
+    hk = _sp_key(host_build)
+    host_band = None if hk is None else sum(1 for b in bounds if hk >= b)
+    return host_band, bounds
 
 
 def match_cpe(conn, cpe, version=None, curations=None):
@@ -531,7 +549,7 @@ def match_cpe(conn, cpe, version=None, curations=None):
     # without pulling a foreign edition's fixes. Otherwise: the exact cpe23 key.
     fam = _ms_family(pkg)
     host_major = _ms_major(version) if fam else None
-    host_sp = _sharepoint_edition(version) if pkg == "sharepoint_server" else None
+    is_sharepoint = pkg == "sharepoint_server"
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
     if fam:                                            # exact sibling keys → index scan (not LIKE)
@@ -550,8 +568,6 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 rmaj = _ms_major(fixed) or _ms_major(intro)
                 if host_major and rmaj and rmaj != host_major:
                     continue                           # foreign edition — different major line
-            if host_sp and (fe := _sharepoint_edition(fixed)) and fe != host_sp:
-                continue                               # foreign SharePoint edition (2016 vs 2019 vs SE)
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
@@ -559,6 +575,21 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 continue                                          # suppressed by a curation rule
             by_cve.setdefault(cid, []).append(
                 (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme, ctx["status"], kb))
+    if is_sharepoint:
+        # Per-CVE edition scoping: within each CVE the fix builds are one-per-edition and far apart,
+        # so keep only the rows on the host's own edition line (see _sp_scope). Without it, a patched
+        # 2016 host reads as vulnerable against the SE/2019 fix, and a 2019 host below its own fix but
+        # above the 2016 fix is missed. r[2] = fixed.
+        for cid, rows in list(by_cve.items()):
+            fix_keys = [k for r in rows if (k := _sp_key(r[2])) is not None]
+            if len(set(fix_keys)) < 2:
+                continue                                   # single line → nothing to scope
+            host_band, bounds = _sp_scope(version, fix_keys)
+            if host_band is None:
+                continue                                   # host build unparseable → don't over-filter
+            kept = [r for r in rows
+                    if (fk := _sp_key(r[2])) is None or sum(1 for b in bounds if fk >= b) == host_band]
+            by_cve[cid] = kept
     return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
 
 
