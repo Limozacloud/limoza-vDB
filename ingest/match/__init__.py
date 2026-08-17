@@ -280,6 +280,26 @@ def _variant(evr):
     return m.group(0) if m else None
 
 
+# The `kernel` package name is shared by parallel kernel LINES whose only difference is the upstream
+# VERSION. RHEL's base kernel is frozen per major (el7=3.10.0, el8=4.18.0, el9=5.14.0, el10=6.x) and
+# only the release/build increments; `kernel-alt` — Red Hat's 4.x preview kernel for RHEL 7 aarch64/
+# POWER — ships its fixes under the SAME `kernel` package name and a PLAIN `.el7` tag (4.5.0-15.2.1.el7),
+# so no `_variant`/layered tag distinguishes it. A base 3.10.0 host sorts BELOW that 4.5.0 fix
+# (3.10.0 < 4.5.0) → false positives, and remediation() takes the max build → a nonsensical 4.5.0
+# target (issue #52). Scope a kernel host to its own version line: a fix whose upstream version
+# differs from the host's is a foreign kernel. Kernel-only — for an ordinary package a version bump
+# is a legitimate upgrade, so this must never generalise.
+_KERNEL_RE = re.compile(r"^kernel(?:-|$)")
+
+
+def _kernel_line(evr):
+    """The upstream VERSION of a kernel EVR (`0:3.10.0-1160.149.1.el7` → '3.10.0'), or None. This is
+    the frozen per-major kernel line; a differing value marks a foreign kernel (e.g. kernel-alt 4.5.0)."""
+    if not evr:
+        return None
+    return _strip_epoch(evr).split("-", 1)[0] or None
+
+
 def _mod_stream(rpmmod):
     """AppStream module identity `name:stream` from glance's `rpmmod` qualifier value
     (`nodejs:18:9070…:rhel9` → `nodejs:18`), or None. Only name:stream is compared — the
@@ -651,6 +671,9 @@ def match(conn, purl, version=None, release=None, curations=None):
     # the SAME stream. Dormant when absent: a non-modular host (or glance not yet emitting rpmmod)
     # has no stream → no filtering, current behaviour (issue #35).
     host_stream = _mod_stream(quals.get("rpmmod"))
+    # kernel line: a base kernel host (el7 3.10.0) must not match kernel-alt's 4.x fixes, which share
+    # the `kernel` package name and a plain .el7 tag (issue #52). Only guard when the host is a kernel.
+    host_kline = _kernel_line(version) if _KERNEL_RE.match(primary) else None
     # Red Hat VEX: a per-binary `not_affected` ("vulnerable code not present") overrides the
     # product-level "affected" statement for the same package. A module co-rebuild lists every rpm in
     # the stream as affected, but Red Hat marks the ones without the vulnerable code not_affected —
@@ -678,6 +701,8 @@ def match(conn, purl, version=None, release=None, curations=None):
             continue                     # foreign parallel line (fips/ksplice) — never the host's
         if host_stream and mstream and mstream != host_stream:
             continue                     # foreign module stream (nodejs:14 vs the host's :18) — #35
+        if host_kline and (fk := _kernel_line(fixed)) and fk != host_kline:
+            continue                     # foreign kernel line (base 3.10.0 vs kernel-alt 4.5.0) — #52
         if suse:
             if not _suse_scope(rel_row, fixed, host_prod, host_maj, host_cs):
                 continue                 # foreign SUSE product / major / codestream
