@@ -35,14 +35,36 @@ thousands of components is a single request. Matches include custom
       "cves": [ { "id": "CVE-…", "fixed": "…", "fix_kb": "KB5043050", "status": "fixed", "sources": ["microsoft"] } ] }
   ] }
 ```
-Each component carries `purl` **or** `cpe`, a `version`, and (for OS packages) a `release`.
-`component` is the identity the matcher **resolved** (a purl or a cpe — a generic purl loses
-to a real ecosystem purl or a cpe). `status` is `vulnerable` | `compliant` | `unknown` (the
+Each component carries a `purl` and/or `cpe`, a `version`, and (for OS packages) a `release`.
+The matcher treats a real ecosystem purl as authoritative and does not retry it through an
+arbitrary supplied CPE when it has no affected-version result: an empty result can mean the
+component is known and compliant. A generic or absent purl uses the supplied CPE directly.
+Reviewed compatibility aliases may map specific legacy identities to their canonical CPE after
+the primary match finds nothing. `component` is the identity the matcher **resolved** (a purl or
+a cpe — a generic purl loses to a real ecosystem purl or a cpe). `status` is `vulnerable` |
+`compliant` | `unknown` (the
 component couldn't be parsed/compared). For Microsoft CPE findings `fix_kb` carries the MSRC
 KB article (e.g. `KB5043050`); it is `null` for distro/ecosystem sources.
 
-`remediation` (present on vulnerable components) is the **single highest fix** that closes the
-component's fixable CVEs — "upgrade to X → done":
+### Temporary legacy identity aliases
+
+Until the next Glance release refreshes host inventory, `/match` also has a narrow compatibility
+fallback for components that are **already present in the request** but have an older generic
+PURL/name and no primary match. It never discovers a file or creates a host component.
+
+| Existing identity | Temporary canonical CPE |
+| --- | --- |
+| `pkg:maven/log4j/log4j@<version>` or matching `log4j-<version>.jar` name | Apache Log4j |
+| `pkg:generic/curl@<version>` or `curl.exe` | haxx curl |
+| `pkg:generic/odbc-driver-sql-server@<version>` or `msodbcsql17.dll`/`msodbcsql18.dll` | Microsoft ODBC Driver for SQL Server |
+| `pkg:generic/oledb-driver-sql-server@<version>` or `msoledbsql.dll` | Microsoft OLE DB Driver for SQL Server |
+
+The response identifies a successful fallback in `identity_source`; values beginning with
+`legacy_` are temporary compatibility mappings. They are retired after the matching Glance
+release has produced canonical inventory identities across refreshed hosts.
+
+For non-SQL components, `remediation` (present on vulnerable components) is the **single highest
+fix** that closes the component's fixable CVEs — "upgrade to X → done":
 
 | Field | Meaning |
 |-------|---------|
@@ -54,6 +76,51 @@ component's fixable CVEs — "upgrade to X → done":
 
 Example: a Windows host → `{ "fixed": "10.0.20348.5256", "fix_kb": "KB5094128", "closes": 2148, "unfixed": 0 }`
 ("install KB5094128 → 2148 CVEs closed"). `null` on compliant components.
+
+#### SQL Server GDR/CU tracks
+
+SQL Server 2019 has verified parallel GDR (`15.0.2xxx` / `2019.150.2xxx`) and CU
+(`15.0.4xxx` / `2019.150.4xxx`) servicing tracks. The requested or inferred track participates
+in the vulnerability verdict itself: a CU host is not cleared merely because it exceeds a lower
+GDR build. A caller may pass `"servicing_track": "gdr"` or `"cu"` on a SQL Server 2019
+component. For a known non-RTM 2019 build, its inferred track takes precedence over a conflicting
+request; a request selects the policy only when the 2019 build itself is ambiguous (RTM).
+The remediation then exposes the selected track at the top level and both alternatives under
+`by_track`:
+
+```json
+{
+  "cpe": "cpe:2.3:a:microsoft:sql_server:15.0.2000.5:*:*:*:*:*:*:*",
+  "version": "2019.150.2000.5",
+  "servicing_track": "gdr"
+}
+```
+
+```json
+{
+  "remediation": {
+    "fixed": "2019.150.2180.2",
+    "fix_kb": "KB5102336",
+    "track": "gdr",
+    "selection": "requested",
+    "closes": 153,
+    "unfixed": 1,
+    "by_track": {
+      "gdr": { "fixed": "2019.150.2180.2", "track": "gdr", "closes": 153, "unfixed": 1 },
+      "cu": { "fixed": "15.0.4316.3", "track": "cu", "closes": 1, "unfixed": 153 }
+    }
+  }
+}
+```
+
+RTM `15.0.2000.5` has not yet selected a servicing track. If no `servicing_track` is supplied,
+the top-level remediation is intentionally `null`/`ambiguous` while `by_track` presents the two
+separate paths. A CVE lacking a verified fix on a requested track is counted in that track's
+`unfixed` value; the API does not assert cross-track equivalence without data for it. Other SQL
+Server editions preserve parallel candidates in a vulnerable result but return an ambiguous
+top-level remediation until vDB has a verified build-to-track classifier. Their vulnerability
+verdict retains the historical parallel-fix behavior rather than applying unverified GDR/CU
+classification rules.
 
 ### `POST /lve` — role `lve_writer`
 Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)).

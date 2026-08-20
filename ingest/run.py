@@ -207,7 +207,7 @@ def _match(args) -> int:
         kb = next((k for _, _, _, k, _ in hits if k), None)
         srcs = ",".join(sorted({s for s, _, _, _, _ in hits}))
         print(f"  {cid}  fixed={fixed or '-'}{('  ' + kb) if kb else ''}  [{srcs}]")
-    rem = remediation(findings)
+    rem = remediation(findings, component=purl)
     if rem and rem.get("fixed"):
         print(f"→ remediation: upgrade to {rem['fixed']}"
               f"{('  ' + rem['fix_kb']) if rem.get('fix_kb') else ''}"
