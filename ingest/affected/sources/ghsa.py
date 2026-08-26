@@ -5,6 +5,8 @@ The GHSA importer already stored each advisory's affected packages in
 events like ``">=1.0.0 <2.0.0; >=3.0.0 <3.1.0"`` (``;`` separates ranges). We just
 project that into the affected table — no re-parsing of source files needed.
 """
+from urllib.parse import unquote
+
 from ingest.affected import row
 from ingest.affected import status as st
 
@@ -33,7 +35,16 @@ def _eco_name(purl_base: str):
     # pkg:pypi/django → ('pypi', 'django') ; pkg:npm/%40scope/x → ('npm', '@scope/x')
     body = purl_base[4:] if purl_base.startswith("pkg:") else purl_base
     eco, _, name = body.partition("/")
-    return eco or None, (name or None)
+    return eco or None, (unquote(name) or None)
+
+
+def _purl_base(purl: str) -> str:
+    """Drop version/qualifiers without mistaking a raw npm scope for a version."""
+    value = purl.split("#", 1)[0].split("?", 1)[0]
+    at = value.rfind("@")
+    if at > value.rfind("/"):
+        value = value[:at]
+    return value
 
 
 def extract(conn, dirs):
@@ -45,7 +56,7 @@ def extract(conn, dirs):
             purl = p.get("purl")
             if not purl:
                 continue
-            base = purl.split("@", 1)[0]
+            base = _purl_base(purl)
             eco, name = _eco_name(base)
             for intro, fixed, last in _spans(p.get("ranges")):
                 yield row(

@@ -146,7 +146,14 @@ def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
 def parse_purl(purl):
     s = purl[4:] if purl.startswith("pkg:") else purl
     s, _, qs = s.partition("?")
-    body, _, version = s.partition("@")
+    # The npm scope marker may arrive raw (`@scope/name`) even though canonical
+    # PURL encodes it as `%40scope/name`. Only an at-sign after the final slash
+    # can delimit a version.
+    at = s.rfind("@")
+    if at > s.rfind("/"):
+        body, version = s[:at], s[at + 1:]
+    else:
+        body, version = s, ""
     parts = body.split("/")
     quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
     ptype = parts[0]
@@ -163,9 +170,9 @@ def parse_purl(purl):
             if m:
                 name = f"linux-{m.group(1)}" if m.group(1) else "linux"
     elif ptype == "maven":
-        name = ":".join(parts[1:])
+        name = unquote(":".join(parts[1:]))
     else:
-        name = "/".join(parts[1:])
+        name = unquote("/".join(parts[1:]))
     return ptype, name, version or None, quals, namespace
 
 
