@@ -20,13 +20,27 @@ _PURL_TYPE = {
 }
 
 
+def _canonical_purl(purl: str) -> str:
+    """Return the canonical spelling needed by the matcher for known PURL types."""
+    prefix = "pkg:npm/"
+    if purl.lower().startswith(prefix + "@"):
+        return purl[:len(prefix)] + "%40" + purl[len(prefix) + 1:]
+    return purl
+
+
 def _purl(pkg: dict):
     if pkg.get("purl"):
-        return pkg["purl"]
+        return _canonical_purl(pkg["purl"])
     eco, name = pkg.get("ecosystem"), pkg.get("name")
     if not (eco and name):
         return None
-    return f"pkg:{_PURL_TYPE.get(eco, eco.lower())}/{name.lower() if eco == 'PyPI' else name}"
+    if eco == "PyPI":
+        name = name.lower()
+    elif eco == "npm" and name.startswith("@"):
+        # PURL represents the npm scope as a namespace and requires the leading
+        # at-sign to be percent-encoded (pkg:npm/%40scope/name).
+        name = "%40" + name[1:]
+    return f"pkg:{_PURL_TYPE.get(eco, eco.lower())}/{name}"
 
 
 def parse(raw: bytes):

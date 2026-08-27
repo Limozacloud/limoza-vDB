@@ -98,6 +98,9 @@ docker compose exec ingest vdb match 'cpe:2.3:o:microsoft:windows_server_2012:6.
 This is the same engine behind the MCP [`check_vulnerable`](mcp.md#tools) tool. See
 [Affected versions → the matcher](../affected-versions.md#the-matcher).
 
+For a SQL Server CPE, `vdb match` also uses the version embedded in the CPE when selecting a
+track-aware remediation; a separate version argument is not required for that selection.
+
 ## daily
 
 The complete pipeline in order — **schema → sync → ingest → affected → hasura-init** —

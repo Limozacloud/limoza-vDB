@@ -74,7 +74,13 @@ def _product_cpes(doc: dict) -> dict:
         pid, raw, name = p.get("ProductID"), p.get("CPE"), p.get("Value") or ""
         if not pid or "mariner" in name.lower():        # MS Linux → own distro, not a CPE
             continue
-        key = cpe_norm.canonical(raw)[0] if raw else cpe_norm.from_name(name)
+        key = cpe_norm.canonical(raw)[0] if raw else None
+        # A raw MSRC CPE can be syntactically valid but use a product spelling absent
+        # from NVD (notably versioned SQL driver names). Its descriptive product name
+        # remains useful only after the strict CPE lookup failed; `from_name` validates
+        # its result against the same NVD dictionary.
+        if not key:
+            key = cpe_norm.from_name(name)
         if key:
             out[pid] = key
     return out

@@ -146,7 +146,14 @@ def is_vulnerable(scheme, installed, introduced, fixed, last_affected, status):
 def parse_purl(purl):
     s = purl[4:] if purl.startswith("pkg:") else purl
     s, _, qs = s.partition("?")
-    body, _, version = s.partition("@")
+    # The npm scope marker may arrive raw (`@scope/name`) even though canonical
+    # PURL encodes it as `%40scope/name`. Only an at-sign after the final slash
+    # can delimit a version.
+    at = s.rfind("@")
+    if at > s.rfind("/"):
+        body, version = s[:at], s[at + 1:]
+    else:
+        body, version = s, ""
     parts = body.split("/")
     quals = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv)
     ptype = parts[0]
@@ -163,9 +170,9 @@ def parse_purl(purl):
             if m:
                 name = f"linux-{m.group(1)}" if m.group(1) else "linux"
     elif ptype == "maven":
-        name = ":".join(parts[1:])
+        name = unquote(":".join(parts[1:]))
     else:
-        name = "/".join(parts[1:])
+        name = unquote("/".join(parts[1:]))
     return ptype, name, version or None, quals, namespace
 
 
@@ -412,23 +419,41 @@ def parse_cpe(cpe):
     return key, ver
 
 
-def _cpe_verdict(installed, rows):
+def _cpe_verdict(installed, rows, version_normalizer=None, preserve_fixes=False,
+                 servicing_track=None):
     """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status, fix_kb).
 
     Group by ``introduced`` (= one affected range). Within a group the host counts as
     patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
     (Windows security-only vs monthly rollup, with different build numbers) don't
-    false-positive. Distinct ranges (different ``introduced``) are OR'd as usual.
+    false-positive. Distinct ranges (different ``introduced``) are OR'd as usual. A
+    product-specific ``version_normalizer`` is used only for comparisons; the returned
+    fixed version remains the source value for display and remediation provenance. A
+    known SQL servicing track evaluates only fixes from that track; a missing same-track
+    fix leaves the CVE affected rather than clearing it through another track. An
+    unclassified SQL Server 2019 build also remains affected while any parallel fix is
+    outstanding, rather than guessing that the lower fix belongs to its servicing line. When
+    ``preserve_fixes`` is true, every reachable parallel fix candidate is returned for
+    one CVE instead of just the smallest representative; SQL Server remediation needs
+    this to keep GDR and CU tracks separate.
     Returns [(src, status, fixed, fix_kb, scheme), …] or [] when not vulnerable.
     """
+    normalize = version_normalizer or (lambda value: value)
+    # Track enforcement is currently verified only for SQL Server 2019 (15.x).
+    # Other SQL releases may still preserve their parallel fix candidates for an
+    # ambiguous remediation response, but must retain the historical "any reachable
+    # parallel fix clears the range" verdict until their build families are classified.
+    # Otherwise a patched GDR host is falsely flagged solely because a higher CU fix
+    # exists on a different line.
+    track_aware = preserve_fixes and _ms_major(installed) == "15"
     groups = {}
     for r in rows:
         if r[5] not in _SKIP:
-            groups.setdefault(r[1], []).append(r)        # by introduced
+            groups.setdefault(normalize(r[1]), []).append(r)        # by introduced
     hits = []
     for intro, group in groups.items():
         scheme = group[0][4]
-        iv = _v(scheme, installed)
+        iv = _v(scheme, normalize(installed))
         if iv is None:
             continue
         if intro and intro != "0":
@@ -436,14 +461,37 @@ def _cpe_verdict(installed, rows):
             if lo is not None and iv < lo:
                 continue                                  # below this range
         had_bounds = any(r[2] or r[3] for r in group)     # rows that specify a fixed / last bound
-        fixes = [(r, _v(scheme, r[2])) for r in group if r[2]]
+        fixes = [(r, _v(scheme, normalize(r[2]))) for r in group if r[2]]
         fixes = [(r, fv) for r, fv in fixes if fv is not None]
-        lasts = [(r, _v(scheme, r[3])) for r in group if r[3]]
+        lasts = [(r, _v(scheme, normalize(r[3]))) for r in group if r[3]]
         lasts = [(r, lv) for r, lv in lasts if lv is not None]
         if fixes:
-            if all(iv < fv for _, fv in fixes):           # not reached by any fix track
-                rep, _fv = min(fixes, key=lambda x: x[1])
-                hits.append((rep[0], rep[5], rep[2], rep[6], scheme))
+            inferred_track = _sql_server_track(installed) if track_aware else None
+            requested_track = (
+                servicing_track if track_aware and servicing_track in {"gdr", "cu"} else None
+            )
+            # A caller may select a track for RTM, whose build is intentionally ambiguous.
+            # A known host build is stronger evidence than a conflicting request.
+            track = inferred_track or requested_track
+            track_fixes = [(r, fv) for r, fv in fixes if _sql_server_track(r[2]) == track]
+            if track:
+                affected = not track_fixes or all(iv < fv for _, fv in track_fixes)
+            elif track_aware:
+                affected = any(iv < fv for _, fv in fixes)
+            else:
+                affected = all(iv < fv for _, fv in fixes)
+            if affected:
+                ordered = sorted(fixes, key=lambda item: item[1])
+                if preserve_fixes:
+                    seen = set()
+                    for fix, _fv in ordered:
+                        hit = (fix[0], fix[5], fix[2], fix[6], scheme)
+                        if hit not in seen:
+                            seen.add(hit)
+                            hits.append(hit)
+                else:
+                    rep, _fv = ordered[0]
+                    hits.append((rep[0], rep[5], rep[2], rep[6], scheme))
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
                 hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6], scheme))
@@ -478,6 +526,74 @@ _MS_MAJOR_FAMILIES = ("sql_server",)
 # back to a full 14M-row seq scan (~40s per Microsoft match). Enumerating the host's two concrete
 # products (generic base + its year edition) keeps the lookup on the index.
 _MS_SQL_YEAR = {"13": "2016", "14": "2017", "15": "2019", "16": "2022", "17": "2025"}
+_SQL_FILE_VERSION = {
+    "2016": ("13", "130"),
+    "2017": ("14", "140"),
+    "2019": ("15", "150"),
+    "2022": ("16", "160"),
+    "2025": ("17", "170"),
+}
+
+
+def _sql_server_engine_version(version):
+    """Return an engine-build form for a documented SQL Server file/engine version.
+
+    SQL Server 2019 can be reported as an engine build (``15.0.2180.2``) or as a
+    sqlservr.exe file version (``2019.150.2180.2``). They name the same build but
+    cannot be compared lexically or with a generic dotted-version comparator. This
+    helper deliberately handles only documented Microsoft forms and leaves unknown
+    values untouched at the call site.
+    """
+    raw = (version or "").strip()
+    parts = raw.split(".")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1] == "0":
+        return raw
+    if len(parts) >= 4 and parts[0] in _SQL_FILE_VERSION:
+        major, file_minor = _SQL_FILE_VERSION[parts[0]]
+        if parts[1] == file_minor and all(part.isdigit() for part in parts[2:]):
+            return ".".join((major, "0", *parts[2:]))
+    # Older Microsoft pages occasionally spell the same file version as
+    # ``2019.15.0.<build>.<revision>``. Keep support narrow and data-driven.
+    if len(parts) >= 5 and parts[0] in _SQL_FILE_VERSION:
+        major, _file_minor = _SQL_FILE_VERSION[parts[0]]
+        if parts[1] == major and parts[2] == "0" and all(part.isdigit() for part in parts[3:]):
+            return ".".join((major, "0", *parts[3:]))
+    return None
+
+
+def _sql_server_version_for_compare(version):
+    """Use the canonical engine form when known, otherwise preserve the source value."""
+    return _sql_server_engine_version(version) or version
+
+
+def _sql_server_track(version):
+    """Return the SQL Server servicing track for a non-RTM build, if known.
+
+    The current affected-data representation proves the GDR/CU build families for SQL
+    Server 2019: GDR fixes use ``15.0.2xxx`` and CU fixes use ``15.0.4xxx``. RTM
+    ``15.0.2000.5`` predates the choice of a servicing track, so callers must select a
+    track explicitly rather than silently treating RTM as GDR. Other editions remain
+    unclassified until their build families are verified.
+    """
+    engine = _sql_server_engine_version(version)
+    if not engine:
+        return None
+    parts = engine.split(".")
+    if len(parts) < 3 or parts[:2] != ["15", "0"] or not parts[2].isdigit():
+        return None
+    build = int(parts[2])
+    if build == 2000:
+        return None
+    if 2000 < build < 3000:
+        return "gdr"
+    if build >= 4000:
+        return "cu"
+    return None
+
+
+def _sql_server_2019_track(version):
+    """Backward-compatible name for the verified SQL Server 2019 classifier."""
+    return _sql_server_track(version)
 
 
 def _ms_family(product):
@@ -493,7 +609,7 @@ def _ms_family(product):
 def _ms_major(version):
     """Leading numeric component of a version — the edition key for a major-versioned MS family
     (`15.0.2000.5` → '15'), or None."""
-    m = re.match(r"\s*(\d+)", version or "")
+    m = re.match(r"\s*(\d+)", _sql_server_version_for_compare(version) or "")
     return m.group(1) if m else None
 
 
@@ -549,7 +665,7 @@ def _sharepoint_product_line(build):
     return _sharepoint_edition(build) or f'{parts[0]}.{parts[1]}'
 
 
-def match_cpe(conn, cpe, version=None, curations=None):
+def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
     version = version or cv
@@ -602,15 +718,19 @@ def match_cpe(conn, cpe, version=None, curations=None):
                 continue                                          # suppressed by a curation rule
             by_cve.setdefault(cid, []).append(
                 (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme, ctx["status"], kb))
-    return {cid: hits for cid, rows in by_cve.items() if (hits := _cpe_verdict(version, rows))}
+    normalizer = _sql_server_version_for_compare if fam == "sql_server" else None
+    return {cid: hits for cid, rows in by_cve.items()
+            if (hits := _cpe_verdict(
+                version, rows, normalizer, fam == "sql_server", servicing_track,
+            ))}
 
 
-def match(conn, purl, version=None, release=None, curations=None):
+def match(conn, purl, version=None, release=None, curations=None, servicing_track=None):
     """Return {cve_id: [(source, status, fixed, fix_kb, scheme), …]} for the vulnerable hits."""
     if curations is None:
         curations = load_curations(conn)
     if purl.startswith("cpe:"):
-        return match_cpe(conn, purl, version, curations)
+        return match_cpe(conn, purl, version, curations, servicing_track)
     ptype, name, pv, quals, namespace = parse_purl(purl)
     version = version or pv
     if not version:
@@ -720,7 +840,7 @@ def match(conn, purl, version=None, release=None, curations=None):
     return findings
 
 
-def remediation(findings: dict):
+def _legacy_remediation(findings: dict):
     """The single highest fix that closes a matched component's fixable CVEs, and which CVE
     demands it — so a caller can say "upgrade to X → closes N". `findings` is the dict match()
     returns ({cve: [(src, status, fixed, fix_kb, scheme), …]}).
@@ -746,9 +866,7 @@ def remediation(findings: dict):
         sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
         parse = [h for h in cand if _v(sc, h[2]) is not None]
         pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
-        fixable.append((cve, pick[2],
-                        next((h[3] for h in hits if h[3]), None),          # fix_kb
-                        pick[4]))                                          # scheme
+        fixable.append((cve, pick[2], pick[3], pick[4]))
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
     schemes = {s for *_, s in fixable}
@@ -758,3 +876,68 @@ def remediation(findings: dict):
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": len(fixable), "unfixed": unfixed}
     top = max(parseable, key=lambda x: _v(comp, x[1]))
     return {"fixed": top[1], "fix_kb": top[2], "cve": top[0], "closes": len(fixable), "unfixed": unfixed}
+
+
+def _sql_server_component_version(component, version):
+    """Return a recognized SQL Server installed version from a CPE/component."""
+    if not (component or "").startswith("cpe:"):
+        return None
+    key, cpe_version = parse_cpe(component)
+    if not key or _ms_family(key.split(":")[4]) != "sql_server":
+        return None
+    installed = version or cpe_version
+    return installed if _ms_major(installed) in _MS_SQL_YEAR else None
+
+
+def _sql_server_track_remediation(findings: dict, track: str):
+    """Return the highest usable remediation on one SQL Server 2019 servicing track.
+
+    A CVE with no candidate on ``track`` is deliberately counted as unresolved. A CU-only
+    row must not be claimed as remediated by a GDR update (or vice versa) unless ingestion
+    supplies a verified sibling row for that CVE.
+    """
+    fixable, unfixed = [], 0
+    for cve, hits in findings.items():
+        candidates = [hit for hit in hits if hit[2] and _sql_server_2019_track(hit[2]) == track]
+        parsed = [(hit, _v("generic", _sql_server_version_for_compare(hit[2]))) for hit in candidates]
+        parsed = [(hit, fixed) for hit, fixed in parsed if fixed is not None]
+        if not parsed:
+            unfixed += 1
+            continue
+        pick, _fixed = max(parsed, key=lambda item: item[1])
+        fixable.append((cve, pick[2], pick[3], pick[4]))
+    if not fixable:
+        return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0,
+                "unfixed": unfixed, "track": track}
+    top = max(fixable, key=lambda item: _v("generic", _sql_server_version_for_compare(item[1])))
+    return {"fixed": top[1], "fix_kb": top[2], "cve": top[0], "closes": len(fixable),
+            "unfixed": unfixed, "track": track}
+
+
+def remediation(findings: dict, component=None, version=None, preferred_track=None):
+    """Return a component remediation, preserving distinct SQL Server GDR/CU paths.
+
+    Non-SQL components retain the historical single-highest-fix result. SQL Server 2019
+    returns a backward-compatible top-level remediation only when the requested or installed
+    build identifies a verified servicing track. Other SQL Server editions remain ambiguous
+    until their track classifier is verified. RTM is intentionally ambiguous: callers receive
+    both alternatives in ``by_track`` and must select a policy/track explicitly.
+    """
+    if not findings:
+        return None
+    installed_version = _sql_server_component_version(component, version)
+    if installed_version is None:
+        return _legacy_remediation(findings)
+
+    by_track = {track: _sql_server_track_remediation(findings, track) for track in ("gdr", "cu")}
+    inferred_track = _sql_server_track(installed_version)
+    requested_track = preferred_track if preferred_track in by_track else None
+    selected_track = inferred_track or requested_track
+    if selected_track in by_track:
+        selected = dict(by_track[selected_track])
+        selected["selection"] = "installed" if inferred_track else "requested"
+    else:
+        selected = {"fixed": None, "fix_kb": None, "cve": None, "closes": 0,
+                    "unfixed": len(findings), "track": None, "selection": "ambiguous"}
+    selected["by_track"] = by_track
+    return selected

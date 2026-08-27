@@ -6,7 +6,7 @@ No model is involved, so there is no token cost — just a DB lookup.
 
     GET  /healthz
     POST /match   (any valid token)   { "components": [ {purl|cpe, version, release?,
-                                         repository_version?}, … ] }
+                                         repository_version?, servicing_track?}, … ] }
                                        → per component {status, cves} + summary. Deduped.
                                        repository_version → per-CVE repo_fixable + repo_fixed_cves
                                        (does the version in your repo close it? re-match & diff).
@@ -28,6 +28,7 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from ingest.component_alias import temporary_cpe_alias
 from ingest.core.db import get_conn
 from ingest.match import (_sharepoint_product_line, load_curations, match, parse_cpe,
                           parse_purl, remediation)
@@ -79,6 +80,7 @@ def _bulk_match(components: list) -> list:
             ident = purl if (purl and not purl.startswith("pkg:generic/")) else (cpe or purl)
             ver = c.get("version") or ""
             rel = c.get("release") or None
+            alias = temporary_cpe_alias(c, ver)
             if ident.startswith("pkg:rpm/") or ident.startswith("pkg:deb/"):
                 _, name, _, quals, _ = parse_purl(ident)
                 # an installed-but-not-running kernel build (active=false, rpm or deb) — the
@@ -104,15 +106,38 @@ def _bulk_match(components: list) -> list:
                     if ((ident.startswith("pkg:rpm/") and (upstream == "kernel" or name.startswith("kernel")))
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
-            k = (ident, ver, rel)
+            preferred_track = c.get("servicing_track")
+            k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track)
             if k not in cache:
                 try:
-                    f = match(conn, ident, ver, rel, curations)
+                    f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track)
+                    matched_ident = ident
+                    identity_source = "primary"
+                    # Compatibility path for components already present in legacy inventory
+                    # under a reviewed generic PURL/name. It does not scan the host or create
+                    # records, and avoids treating a known-compliant PURL as an unsupported one.
+                    if not f and alias and alias[0] != ident:
+                        try:
+                            alias_findings = match(conn, alias[0], ver, rel, curations,
+                                                   servicing_track=preferred_track)
+                        except Exception:
+                            alias_findings = {}
+                        if alias_findings:
+                            f, matched_ident, identity_source = alias_findings, alias[0], alias[1]
                     cache[k] = {"status": "vulnerable" if f else "compliant",
-                                "remediation": remediation(f), "cves": _fmt(f)}
+                                "remediation": remediation(
+                                    f, component=matched_ident, version=ver, preferred_track=preferred_track),
+                                "cves": _fmt(f), "identity_source": identity_source,
+                                "_matched_component": matched_ident}
                 except Exception as e:
-                    cache[k] = {"status": "unknown", "cves": [], "error": str(e)}
+                    cache[k] = {"status": "unknown", "cves": [], "error": str(e),
+                                "identity_source": "primary", "_matched_component": ident}
             entry = cache[k]
+            matched_ident = entry["_matched_component"]
+
+            def public_entry(value: dict) -> dict:
+                return {field: item for field, item in value.items() if not field.startswith("_")}
+
             # repository_version: "would the version available in OUR repo close these CVEs?"
             # Re-match with that version as the installed one — a CVE that drops out is one the repo
             # version fixes (same comparator, vendor scoping, epoch, curations as the real match).
@@ -123,8 +148,8 @@ def _bulk_match(components: list) -> list:
                 extra["repo_fixed_cves"] = []
                 if entry.get("cves"):
                     sharepoint_line_mismatch = False
-                    if ident.startswith("cpe:"):
-                        cpe_key, _ = parse_cpe(ident)
+                    if matched_ident.startswith("cpe:"):
+                        cpe_key, _ = parse_cpe(matched_ident)
                         if cpe_key and cpe_key.split(":")[4] == "sharepoint_server":
                             sharepoint_line_mismatch = (
                                 _sharepoint_product_line(ver) != _sharepoint_product_line(repo_ver))
@@ -134,12 +159,15 @@ def _bulk_match(components: list) -> list:
                         # upgrade even when independently matching it makes the CVE disappear.
                         entry = {**entry, "cves": [{**cv, "repo_fixable": False}
                                                    for cv in entry["cves"]]}
-                        results.append({"component": ident, "version": ver, **entry, **extra})
+                        results.append({"component": matched_ident, "version": ver, **public_entry(entry), **extra})
                         continue
-                    rk = (ident, repo_ver, rel)
+                    rk = (matched_ident, repo_ver, rel, preferred_track)
                     if rk not in repo_cache:
                         try:
-                            repo_cache[rk] = set(match(conn, ident, repo_ver, rel, curations))
+                            repo_cache[rk] = set(match(
+                                conn, matched_ident, repo_ver, rel, curations,
+                                servicing_track=preferred_track,
+                            ))
                         except Exception:
                             repo_cache[rk] = None            # unparseable repo version → can't decide
                     still_open = repo_cache[rk]
@@ -148,7 +176,7 @@ def _bulk_match(components: list) -> list:
                         entry = {**entry, "cves": [{**cv, "repo_fixable": cv["id"] in fixedset}
                                                    for cv in entry["cves"]]}
                         extra["repo_fixed_cves"] = sorted(fixedset)
-            results.append({"component": ident, "version": ver, **entry, **extra})
+            results.append({"component": matched_ident, "version": ver, **public_entry(entry), **extra})
         return results
     finally:
         conn.close()

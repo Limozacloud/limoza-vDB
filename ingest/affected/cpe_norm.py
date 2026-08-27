@@ -91,6 +91,20 @@ def canonical(cpe):
 def from_name(value, vendor="microsoft"):
     """Human product name (no-CPE MSRC product) → NVD-validated canonical key, or None."""
     s = _QUAL.sub("", (value or "").lower()).replace(",", " ")
+    # MSRC occasionally supplies a versioned/non-NVD CPE for these driver products.
+    # Do not let their human name collapse into the SQL Server engine family: the drivers
+    # have independent version lines and fixes. `_resolve` still enforces that the chosen
+    # alias exists in the loaded NVD CPE dictionary.
+    driver_words = re.sub(r"[_-]+", " ", s)
+    if str(vendor).lower() == "microsoft":
+        if "odbc" in driver_words and "driver" in driver_words and "sql server" in driver_words:
+            key = _resolve("a", vendor, "odbc_driver_for_sql_server", None)
+            if key:
+                return key
+        if "ole db" in driver_words and "driver" in driver_words and "sql server" in driver_words:
+            key = _resolve("a", vendor, "ole_db_driver_for_sql_server", None)
+            if key:
+                return key
     update = None
     if re.search(r"\br2\b", s):
         update = "r2"
