@@ -21,6 +21,7 @@ COLS = (
     "cve_id", "coord", "ecosystem", "package", "purl", "cpe23", "release",
     "introduced", "fixed", "last_affected", "fix_kb", "version_scheme", "module_stream",
     "status", "status_raw", "justification", "source", "status_source", "origin",
+    "source_data",
 )
 
 

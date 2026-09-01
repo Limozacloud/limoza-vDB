@@ -33,6 +33,7 @@ OSV-style ranges in either coordinate:
 | `cpe23` | cpe-lane identity — canonical 13-field `vendor:product` (see [CPE validation](#cpe-validation)) |
 | `introduced` / `fixed` / `last_affected` | the version range (fixed = exclusive upper, last_affected = inclusive) |
 | `fix_kb` | remediation reference for the fix — a Microsoft MSRC KB (e.g. `KB5043050`); NULL for other sources |
+| `source_data` | source-specific range evidence; Microsoft rows retain the original MSRC product and applicability metadata |
 | `version_scheme` | how to compare (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
 | `status` | canonical VEX status (below) |
 | `status_raw` | the source's original wording, kept for audit |
@@ -158,11 +159,12 @@ exposed as the [`vdb match`](running/cli.md#match) CLI and the
   [curation](#curation-match-time-overrides) rule is applied per row (suppress / set_status /
   set_fixed) before the verdict, so overrides always take effect without altering the raw data.
 
-Each finding carries the `fixed` version and, for Microsoft CPE hits, the `fix_kb` (MSRC KB).
-The matcher also derives a per-component **remediation** — the single highest fix that closes the
-component's fixable CVEs, which CVE demands it, its KB, and how many it `closes` vs leaves
-`unfixed` (CVEs with no fix). Surfaced as the `remediation` field of a [`/match`](running/rest-api.md)
-result ("upgrade to X → N closed").
+Each applicable finding carries the `fixed` version and, for Microsoft CPE hits, the source
+MSRC KB. Microsoft product, platform, framework, and servicing-channel restrictions are checked
+against host/component metadata before remediation selection. If required context is missing,
+the vulnerability remains visible but remediation is `ambiguous` with no actionable `fix_kb`.
+The source KB identifies Microsoft's fixed state; Windows Update may offer a newer cumulative
+package or an umbrella KB instead.
 
 ```bash
 vdb match pkg:rpm/redhat/openssl@1.0.1e-30.el6_6.1

@@ -399,9 +399,77 @@ def parse_cpe(cpe):
     return key, ver
 
 
+def _microsoft_applicability(source_data, host=None, component_metadata=None):
+    """Return applicability evidence for one MSRC product row."""
+    if not isinstance(source_data, dict):
+        return {"state": "applicable", "source_data": {}}
+    host = host if isinstance(host, dict) else {}
+    component_metadata = component_metadata if isinstance(component_metadata, dict) else {}
+    unresolved = []
+
+    required_windows = source_data.get("windows_product")
+    host_windows = host.get("windows_product")
+    if required_windows:
+        if not host_windows:
+            unresolved.append("windows_product")
+        elif str(required_windows).lower() != str(host_windows).lower():
+            return {"state": "incompatible", "source_data": source_data}
+
+    required_framework = source_data.get("dotnet_framework_product")
+    host_framework = component_metadata.get("dotnet_framework_product")
+    if required_framework:
+        if not host_framework or host_framework == "unknown":
+            unresolved.append("dotnet_framework_product")
+        elif str(required_framework) != str(host_framework):
+            return {"state": "incompatible", "source_data": source_data}
+
+    required_arch = source_data.get("architecture")
+    host_arch = host.get("architecture")
+    if required_arch:
+        if not host_arch or host_arch == "unknown":
+            unresolved.append("architecture")
+        elif str(required_arch).lower() != str(host_arch).lower():
+            return {"state": "incompatible", "source_data": source_data}
+
+    if source_data.get("windows_installation_type") == "server_core":
+        installation_type = str(host.get("windows_installation_type") or "").lower()
+        if not installation_type:
+            unresolved.append("windows_installation_type")
+        elif "core" not in installation_type:
+            return {"state": "incompatible", "source_data": source_data}
+
+    if source_data.get("servicing_channel") == "hotpatch":
+        edition = " ".join(str(host.get(key) or "") for key in (
+            "windows_edition_id", "windows_composition_edition_id",
+        )).lower()
+        if not edition.strip():
+            unresolved.append("windows_edition_id")
+        elif "azure" not in edition:
+            return {"state": "incompatible", "source_data": source_data}
+
+    return {
+        "state": "unknown" if unresolved else "applicable",
+        "unresolved": sorted(set(unresolved)),
+        "source_data": source_data,
+    }
+
+
+def _hit_state(hit) -> str:
+    return hit[5].get("state", "applicable") if len(hit) > 5 and hit[5] else "applicable"
+
+
+def _candidate(hit) -> dict:
+    evidence = hit[5].get("source_data", {}) if len(hit) > 5 and hit[5] else {}
+    return {
+        "fixed": hit[2],
+        "source_fix_kb": hit[3],
+        "applicability": evidence,
+    }
+
+
 def _cpe_verdict(installed, rows, version_normalizer=None, preserve_fixes=False,
                  servicing_track=None):
-    """rows for one CVE: list of (src, introduced, fixed, last_affected, scheme, status, fix_kb).
+    """rows for one CVE: (src, introduced, fixed, last, scheme, status, KB, applicability).
 
     Group by ``introduced`` (= one affected range). Within a group the host counts as
     patched as soon as it reaches ANY of the group's fix builds — so parallel fix tracks
@@ -416,7 +484,7 @@ def _cpe_verdict(installed, rows, version_normalizer=None, preserve_fixes=False,
     ``preserve_fixes`` is true, every reachable parallel fix candidate is returned for
     one CVE instead of just the smallest representative; SQL Server remediation needs
     this to keep GDR and CU tracks separate.
-    Returns [(src, status, fixed, fix_kb, scheme), …] or [] when not vulnerable.
+    Returns [(src, status, fixed, fix_kb, scheme, applicability), …] or [].
     """
     normalize = version_normalizer or (lambda value: value)
     # Track enforcement is currently verified only for SQL Server 2019 (15.x).
@@ -465,21 +533,23 @@ def _cpe_verdict(installed, rows, version_normalizer=None, preserve_fixes=False,
                 if preserve_fixes:
                     seen = set()
                     for fix, _fv in ordered:
-                        hit = (fix[0], fix[5], fix[2], fix[6], scheme)
-                        if hit not in seen:
-                            seen.add(hit)
-                            hits.append(hit)
+                        key = (fix[0], fix[5], fix[2], fix[6], scheme)
+                        if key not in seen:
+                            seen.add(key)
+                            hits.append((*key, fix[7]))
                 else:
                     rep, _fv = ordered[0]
-                    hits.append((rep[0], rep[5], rep[2], rep[6], scheme))
+                    hits.append((rep[0], rep[5], rep[2], rep[6], scheme, rep[7]))
         elif lasts:
             if any(iv <= lv for _, lv in lasts):
-                hits.append((lasts[0][0][0], lasts[0][0][5], None, lasts[0][0][6], scheme))
+                rep = lasts[0][0]
+                hits.append((rep[0], rep[5], None, rep[6], scheme, rep[7]))
         elif had_bounds:
             continue                                       # had a fixed/last bound but it didn't
             #                                                parse → can't decide → don't flag (no FP)
         else:
-            hits.append((group[0][0], group[0][5], None, group[0][6], scheme))  # no bound → open-ended
+            rep = group[0]
+            hits.append((rep[0], rep[5], None, rep[6], scheme, rep[7]))
     return hits
 
 
@@ -645,7 +715,8 @@ def _sharepoint_product_line(build):
     return _sharepoint_edition(build) or f'{parts[0]}.{parts[1]}'
 
 
-def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
+def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
+              host=None, component_metadata=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
     key, cv = parse_cpe(cpe)
     version = version or cv
@@ -654,6 +725,9 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
     pkg = key.split(":")[4]
+    host = dict(host) if isinstance(host, dict) else {}
+    if pkg.startswith("windows_") and not host.get("windows_product"):
+        host["windows_product"] = pkg
     if pkg == 'sharepoint_server':
         # The generic CPE does not carry the 2016 / 2019 / Subscription identity. A partial or
         # marketing-year version cannot select an edition and must be "unknown", never compared
@@ -670,7 +744,7 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
     host_major = _ms_major(version) if fam else None
     host_sharepoint_edition = _sharepoint_edition(version) if pkg == 'sharepoint_server' else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
-            "split_part(cpe23, ':', 5) FROM affected WHERE coord = 'cpe' ")
+            "split_part(cpe23, ':', 5), source_data FROM affected WHERE coord = 'cpe' ")
     if fam:                                            # exact sibling keys → index scan (not LIKE)
         p = key.split(":")
         fam_keys = [":".join(p[:4] + [prod] + p[5:]) for prod in _ms_family_products(fam, host_major)]
@@ -680,7 +754,7 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
     by_cve = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        for cid, src, intro, fixed, last, scheme, status, kb, product in cur.fetchall():
+        for cid, src, intro, fixed, last, scheme, status, kb, product, source_data in cur.fetchall():
             if fam:
                 if _ms_family(product) != fam:         # a real family sibling only (not …_studio)
                     continue
@@ -691,13 +765,19 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
                 fixed_sharepoint_edition = _sharepoint_edition(fixed)
                 if fixed_sharepoint_edition and fixed_sharepoint_edition != host_sharepoint_edition:
                     continue                           # foreign SharePoint edition (2016 / 2019 / SE)
+            applicability = _microsoft_applicability(
+                source_data, host=host, component_metadata=component_metadata,
+            )
+            if applicability["state"] == "incompatible":
+                continue
             ctx = _curate(cid, {"coord": "cpe", "ecosystem": None, "package": pkg, "cpe23": key,
                                 "release": None, "source": src, "status": status,
                                 "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
             if ctx is None:
                 continue                                          # suppressed by a curation rule
             by_cve.setdefault(cid, []).append(
-                (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme, ctx["status"], kb))
+                (src, ctx["introduced"], ctx["fixed"], ctx["last_affected"], scheme,
+                 ctx["status"], kb, applicability))
     normalizer = _sql_server_version_for_compare if fam == "sql_server" else None
     return {cid: hits for cid, rows in by_cve.items()
             if (hits := _cpe_verdict(
@@ -705,12 +785,14 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None):
             ))}
 
 
-def match(conn, purl, version=None, release=None, curations=None, servicing_track=None):
+def match(conn, purl, version=None, release=None, curations=None, servicing_track=None,
+          host=None, component_metadata=None):
     """Return {cve_id: [(source, status, fixed, fix_kb, scheme), …]} for the vulnerable hits."""
     if curations is None:
         curations = load_curations(conn)
     if purl.startswith("cpe:"):
-        return match_cpe(conn, purl, version, curations, servicing_track)
+        return match_cpe(conn, purl, version, curations, servicing_track,
+                         host=host, component_metadata=component_metadata)
     ptype, name, pv, quals, namespace = parse_purl(purl)
     version = version or pv
     if not version:
@@ -828,9 +910,17 @@ def _legacy_remediation(findings: dict):
     """
     if not findings:
         return None
-    fixable, unfixed = [], 0
+    fixable, unfixed, ambiguous = [], 0, []
     for cve, hits in findings.items():
-        cand = [h for h in hits if h[2]]                    # hits that carry a fix
+        applicable = [h for h in hits if _hit_state(h) == "applicable"]
+        unknown = [h for h in hits if _hit_state(h) == "unknown"]
+        if not applicable and unknown:
+            for hit in unknown:
+                candidate = {"cve": cve, **_candidate(hit)}
+                if candidate not in ambiguous:
+                    ambiguous.append(candidate)
+            continue
+        cand = [h for h in applicable if h[2]]              # applicable hits with a fix
         if not cand:
             unfixed += 1
             continue
@@ -842,6 +932,10 @@ def _legacy_remediation(findings: dict):
         parse = [h for h in cand if _v(sc, h[2]) is not None]
         pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
         fixable.append((cve, pick[2], pick[3], pick[4]))
+    if ambiguous:
+        return {"fixed": None, "fix_kb": None, "source_fix_kb": None, "cve": None,
+                "closes": len(fixable), "unfixed": unfixed,
+                "selection": "ambiguous", "candidates": ambiguous}
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
     schemes = {s for *_, s in fixable}
@@ -850,7 +944,9 @@ def _legacy_remediation(findings: dict):
     if not parseable:                                       # nothing comparable → don't invent a max
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": len(fixable), "unfixed": unfixed}
     top = max(parseable, key=lambda x: _v(comp, x[1]))
-    return {"fixed": top[1], "fix_kb": top[2], "cve": top[0], "closes": len(fixable), "unfixed": unfixed}
+    return {"fixed": top[1], "fix_kb": top[2], "source_fix_kb": top[2],
+            "cve": top[0], "closes": len(fixable), "unfixed": unfixed,
+            "selection": "applicable"}
 
 
 def _sql_server_component_version(component, version):

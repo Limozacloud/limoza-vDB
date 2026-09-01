@@ -19,6 +19,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from psycopg2.extras import Json
+
 from ingest.affected import COLS, cpe_norm, row
 from ingest.affected import status as st
 from ingest.core.cveid import normalize
@@ -28,6 +30,8 @@ _CVE_I, _CPE_I, _INTRO_I, _FIXED_I, _KB_I = (
     COLS.index("fixed"), COLS.index("fix_kb"))
 
 ORIGIN = SOURCE = "microsoft"
+
+_DOTNET_PRODUCTS = {".net", ".net_framework", "dotnet_framework"}
 
 # Office family uses the 16.0.MMMM.PPPP build scheme; MSRC sometimes drops the "16.0."
 _OFFICE = ("office", "excel", "word", "outlook", "powerpoint", "onenote", "visio",
@@ -56,6 +60,13 @@ def _norm_build(fb: str, product: str):
       compares against the scanner's full build (16.0.MMMM.PPPP).
     """
     fb = (fb or "").strip()
+    if "&" in fb:
+        builds = [part.strip() for part in fb.split("&") if part.strip()]
+        if product in _DOTNET_PRODUCTS:
+            builds = [build for build in builds if build.startswith("4.")]
+        if len(builds) != 1:
+            return None
+        fb = builds[0]
     if not _BUILD.match(fb):                       # URL / prose → not a build
         return None
     if fb.count(".") == 1 and any(o in product for o in _OFFICE):
@@ -68,13 +79,13 @@ def _build_key(b: str) -> tuple:
 
 
 def _product_cpes(doc: dict) -> dict:
-    """ProductID → NVD-validated canonical cpe23, for every CPE-matchable product."""
+    """ProductID → canonical CPE plus the source identity used to establish applicability."""
     out = {}
     for p in (doc.get("ProductTree") or {}).get("FullProductName") or []:
         pid, raw, name = p.get("ProductID"), p.get("CPE"), p.get("Value") or ""
         if not pid or "mariner" in name.lower():        # MS Linux → own distro, not a CPE
             continue
-        key = cpe_norm.canonical(raw)[0] if raw else None
+        key, source_version = cpe_norm.canonical(raw) if raw else (None, None)
         # A raw MSRC CPE can be syntactically valid but use a product spelling absent
         # from NVD (notably versioned SQL driver names). Its descriptive product name
         # remains useful only after the strict CPE lookup failed; `from_name` validates
@@ -82,8 +93,57 @@ def _product_cpes(doc: dict) -> dict:
         if not key:
             key = cpe_norm.from_name(name)
         if key:
-            out[pid] = key
+            out[pid] = {
+                "cpe": key,
+                "product_id": str(pid),
+                "product_name": name,
+                "raw_cpe": raw,
+                "source_version": source_version,
+            }
     return out
+
+
+def _platform_from_name(name: str) -> str | None:
+    value = name.lower()
+    server = re.search(r"windows server (\d{4})", value)
+    if server:
+        return f"windows_server_{server.group(1)}"
+    desktop = re.search(r"windows (\d+) version ([0-9a-z]+)", value)
+    if desktop:
+        return f"windows_{desktop.group(1)}_{desktop.group(2)}"
+    return None
+
+
+def _architecture_from_name(name: str) -> str | None:
+    value = name.lower()
+    if "arm64" in value:
+        return "arm64"
+    if "x64" in value:
+        return "x64"
+    if "32-bit" in value or "x86" in value:
+        return "x86"
+    return None
+
+
+def _source_data(product: dict, remediation: dict) -> Json:
+    subtype = str(remediation.get("SubType") or "")
+    product_name = product["product_name"]
+    cpe_product = product["cpe"].split(":")[4]
+    framework_product = product["source_version"] if cpe_product in _DOTNET_PRODUCTS else None
+    return Json({
+        "msrc_product_id": product["product_id"],
+        "msrc_product_name": product_name,
+        "raw_cpe": product["raw_cpe"],
+        "product_version": product["source_version"],
+        "dotnet_framework_product": framework_product,
+        "windows_product": _platform_from_name(product_name),
+        "architecture": _architecture_from_name(product_name),
+        "windows_installation_type": (
+            "server_core" if "server core installation" in product_name.lower() else None
+        ),
+        "servicing_channel": "hotpatch" if "hotpatch" in subtype.lower() else "standard",
+        "remediation_url": remediation.get("URL"),
+    })
 
 
 def _doc_rows(doc: dict):
@@ -110,13 +170,16 @@ def _doc_rows(doc: dict):
             kb_raw = str((r.get("Description") or {}).get("Value") or "").strip()
             kb = f"KB{kb_raw}" if kb_raw.isdigit() else None
             for pid in r.get("ProductID") or []:
-                cpe = pmap.get(pid)
-                if not cpe:
+                product = pmap.get(pid)
+                if not product:
                     continue
+                cpe = product["cpe"]
                 fb = _norm_build(fb_raw, cpe.split(":")[4])
                 if fb is None:           # URL (C2R auto-update) / non-build → not matchable, drop
                     continue
-                key = (cpe, fb)
+                # Product IDs can share a CPE/build while differing by architecture,
+                # installation type, or servicing applicability. Keep those variants.
+                key = (cpe, fb, product["product_id"])
                 if key in seen:
                     continue
                 seen.add(key)
@@ -137,7 +200,8 @@ def _doc_rows(doc: dict):
                 yield row(cve_id=cid, coord="cpe", cpe23=cpe, package=cpe.split(":")[4],
                           introduced=intro, fixed=fb, fix_kb=kb, version_scheme="generic",
                           status=st.FIXED, status_raw=sub,
-                          source=SOURCE, status_source="own", origin=ORIGIN)
+                          source=SOURCE, status_source="own", origin=ORIGIN,
+                          source_data=_source_data(product, r))
 
 
 def _derive_sql_tracks(rows: list) -> list:

@@ -375,6 +375,7 @@ CREATE TABLE IF NOT EXISTS affected (
     source         TEXT NOT NULL,
     status_source  TEXT NOT NULL DEFAULT 'own',
     origin         TEXT NOT NULL,
+    source_data    JSONB,     -- source-specific affected metadata; MSRC product/applicability evidence for Microsoft rows
     synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_affected_cve  ON affected (cve_id);
