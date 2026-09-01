@@ -135,6 +135,51 @@ top-level remediation until vDB has a verified build-to-track classifier. Their 
 verdict retains the historical parallel-fix behavior rather than applying unverified GDR/CU
 classification rules.
 
+#### SQL Server GDR/CU tracks
+
+SQL Server 2019 has verified parallel GDR (`15.0.2xxx` / `2019.150.2xxx`) and CU
+(`15.0.4xxx` / `2019.150.4xxx`) servicing tracks. The requested or inferred track participates
+in the vulnerability verdict itself: a CU host is not cleared merely because it exceeds a lower
+GDR build. A caller may pass `"servicing_track": "gdr"` or `"cu"` on a SQL Server 2019
+component. For a known non-RTM 2019 build, its inferred track takes precedence over a conflicting
+request; a request selects the policy only when the 2019 build itself is ambiguous (RTM).
+The remediation then exposes the selected track at the top level and both alternatives under
+`by_track`:
+
+```json
+{
+  "cpe": "cpe:2.3:a:microsoft:sql_server:15.0.2000.5:*:*:*:*:*:*:*",
+  "version": "2019.150.2000.5",
+  "servicing_track": "gdr"
+}
+```
+
+```json
+{
+  "remediation": {
+    "fixed": "2019.150.2180.2",
+    "fix_kb": "KB5102336",
+    "track": "gdr",
+    "selection": "requested",
+    "closes": 153,
+    "unfixed": 1,
+    "by_track": {
+      "gdr": { "fixed": "2019.150.2180.2", "track": "gdr", "closes": 153, "unfixed": 1 },
+      "cu": { "fixed": "15.0.4316.3", "track": "cu", "closes": 1, "unfixed": 153 }
+    }
+  }
+}
+```
+
+RTM `15.0.2000.5` has not yet selected a servicing track. If no `servicing_track` is supplied,
+the top-level remediation is intentionally `null`/`ambiguous` while `by_track` presents the two
+separate paths. A CVE lacking a verified fix on a requested track is counted in that track's
+`unfixed` value; the API does not assert cross-track equivalence without data for it. Other SQL
+Server editions preserve parallel candidates in a vulnerable result but return an ambiguous
+top-level remediation until vDB has a verified build-to-track classifier. Their vulnerability
+verdict retains the historical parallel-fix behavior rather than applying unverified GDR/CU
+classification rules.
+
 ### `POST /lve` — role `lve_writer`
 Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)).
 A read-only token gets `403`.
