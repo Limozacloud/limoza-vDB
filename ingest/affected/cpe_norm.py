@@ -48,6 +48,10 @@ def _resolve(part, vendor, product, update):
     """Pick the NVD-valid (product, update) among candidates → key, or None."""
     upd = update if update not in _VAGUE else None
     cands = [(product, upd)]
+    if vendor == "microsoft" and product in {".net", "dotnet_framework"}:
+        # MSRC uses `.net` for framework bundles while Glance and NVD use
+        # `.net_framework`. Keep one scanner-facing identity for both spellings.
+        cands.insert(0, (".net_framework", upd))
     m = _SPLIT.match(product)
     if m:
         cands.append((m.group(1), m.group(2)))        # _r2 in product → update field

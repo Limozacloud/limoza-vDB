@@ -59,20 +59,47 @@ def _roles(payload) -> list:
 def _fmt(findings: dict) -> list:
     out = []
     for cid, hits in sorted(findings.items()):
+        applicable = [hit for hit in hits if len(hit) < 6 or hit[5].get("state") == "applicable"]
+        selected = next((hit for hit in applicable if hit[2] or hit[3]), None)
+        if selected is None and applicable:
+            selected = applicable[0]
+        candidates = [] if selected else [
+            {"fixed": hit[2], "source_fix_kb": hit[3],
+             "applicability": hit[5].get("source_data", {})}
+            for hit in hits if len(hit) > 5 and hit[5].get("state") == "unknown"
+        ]
         out.append({"id": cid,
-                    "fixed": next((f for _, _, f, _, _ in hits if f), None),
-                    "fix_kb": next((k for _, _, _, k, _ in hits if k), None),
+                    "fixed": selected[2] if selected else None,
+                    "fix_kb": selected[3] if selected else None,
+                    "source_fix_kb": selected[3] if selected else None,
+                    "selection": "applicable" if selected else "ambiguous",
+                    "candidates": candidates,
                     "status": hits[0][1],
-                    "sources": sorted({s for s, _, _, _, _ in hits})})
+                    "sources": sorted({hit[0] for hit in hits})})
     return out
 
 
-def _bulk_match(components: list) -> list:
+def _bulk_match(components: list, host=None) -> list:
     """Match a batch; identical (ident, version, release) tuples are computed once."""
     conn = get_conn()
     try:
         curations = load_curations(conn)          # load once, apply to every component
         cache, repo_cache, results = {}, {}, []
+        host = dict(host) if isinstance(host, dict) else {}
+        for component in components:
+            cpe = component.get("cpe") or ""
+            metadata = component.get("metadata")
+            if not cpe.startswith("cpe:") or not isinstance(metadata, dict):
+                continue
+            cpe_key, _ = parse_cpe(cpe)
+            product = cpe_key.split(":")[4] if cpe_key else ""
+            if product.startswith("windows_"):
+                host.setdefault("windows_product", product)
+                for field in ("windows_edition_id", "windows_composition_edition_id",
+                              "windows_installation_type", "windows_product_name",
+                              "windows_display_version", "architecture"):
+                    if metadata.get(field) not in (None, ""):
+                        host.setdefault(field, metadata[field])
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -107,10 +134,13 @@ def _bulk_match(components: list) -> list:
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             preferred_track = c.get("servicing_track")
-            k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track)
+            metadata = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+            context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
+            k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
             if k not in cache:
                 try:
-                    f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track)
+                    f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track,
+                              host=host, component_metadata=metadata)
                     matched_ident = ident
                     identity_source = "primary"
                     # Compatibility path for components already present in legacy inventory
@@ -118,8 +148,11 @@ def _bulk_match(components: list) -> list:
                     # records, and avoids treating a known-compliant PURL as an unsupported one.
                     if not f and alias and alias[0] != ident:
                         try:
-                            alias_findings = match(conn, alias[0], ver, rel, curations,
-                                                   servicing_track=preferred_track)
+                            alias_findings = match(
+                                conn, alias[0], ver, rel, curations,
+                                servicing_track=preferred_track, host=host,
+                                component_metadata=metadata,
+                            )
                         except Exception:
                             alias_findings = {}
                         if alias_findings:
@@ -161,12 +194,13 @@ def _bulk_match(components: list) -> list:
                                                    for cv in entry["cves"]]}
                         results.append({"component": matched_ident, "version": ver, **public_entry(entry), **extra})
                         continue
-                    rk = (matched_ident, repo_ver, rel, preferred_track)
+                    rk = (matched_ident, repo_ver, rel, preferred_track, context_key)
                     if rk not in repo_cache:
                         try:
                             repo_cache[rk] = set(match(
                                 conn, matched_ident, repo_ver, rel, curations,
-                                servicing_track=preferred_track,
+                                servicing_track=preferred_track, host=host,
+                                component_metadata=metadata,
                             ))
                         except Exception:
                             repo_cache[rk] = None            # unparseable repo version → can't decide
@@ -298,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "invalid json"})
 
         if self.path == "/match":
-            res = _bulk_match(body.get("components") or [])
+            res = _bulk_match(body.get("components") or [], body.get("host"))
             self._json(200, {
                 "total": len(res),
                 "vulnerable": sum(1 for r in res if r["status"] == "vulnerable"),

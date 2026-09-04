@@ -203,9 +203,9 @@ def _match(args) -> int:
     print(f"{len(findings)} vulnerable CVE(s):")
     for cid in sorted(findings):
         hits = findings[cid]
-        fixed = next((f for _, _, f, _, _ in hits if f), None)
-        kb = next((k for _, _, _, k, _ in hits if k), None)
-        srcs = ",".join(sorted({s for s, _, _, _, _ in hits}))
+        fixed = next((hit[2] for hit in hits if hit[2]), None)
+        kb = next((hit[3] for hit in hits if hit[3]), None)
+        srcs = ",".join(sorted({hit[0] for hit in hits}))
         print(f"  {cid}  fixed={fixed or '-'}{('  ' + kb) if kb else ''}  [{srcs}]")
     rem = remediation(findings, component=purl)
     if rem and rem.get("fixed"):

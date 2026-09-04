@@ -61,9 +61,15 @@ Microsoft patches by **build number**, not package version. The `microsoft` extr
   resolved via `cpe_norm.from_name()` and validated the same way (covers Windows OS +
   Office 2016+/SQL/Visual Studio).
 - **Fix build.** `FixedBuild` → `affected.fixed` (`version_scheme = generic`), so the
-  matcher version-compares a host build against it. The KB article shipping that build
-  (Remediation Type 2) is captured in `affected.fix_kb` (e.g. `KB5043050`) and surfaced by
-  the matcher — a `/match` finding names the exact patch.
+  matcher version-compares a host build against it. Compound .NET Framework values are
+  reduced to the build for the source CPE's framework branch. The source KB is captured in
+  `affected.fix_kb`; it identifies the fixed state but may differ from the cumulative or
+  umbrella package Windows Update offers to a particular host.
+- **Applicability.** `affected.source_data` retains ProductID, product name, raw CPE/version,
+  Windows product, architecture, installation type, and remediation subtype/channel. Matching
+  excludes foreign Windows/.NET products and Hotpatch fixes on non-Azure editions before it
+  selects a remediation. Missing required context produces an ambiguous remediation, not a
+  guessed KB.
 - **SharePoint editions.** MSRC's `sharepoint_server_2016` and `sharepoint_server_2019`
   product names are normalised to the NVD/scanner identity `sharepoint_server`. Because
   SharePoint 2016, 2019 and Subscription Edition all use version major `16.0`, the matcher
@@ -82,8 +88,9 @@ Microsoft patches by **build number**, not package version. The `microsoft` extr
 - **Dropped:** CBL / Azure Linux (Microsoft's own Linux distro — not a CPE product), and
   any product whose CPE can't be validated against NVD.
 
-**Known limit:** apps NVD identifies by year-in-version with no build (Exchange,
-Excel, .NET) are matchable only year-coarse via CPE, so they are not emitted.
+**Known limit:** apps NVD identifies by year-in-version with no build (Exchange and
+some Office products) are matchable only year-coarse via CPE. .NET Framework uses its raw
+MSRC CPE product line plus the scanner's registry Release metadata.
 
 ## Advisory URL
 

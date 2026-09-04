@@ -202,6 +202,7 @@ The version-precise layer derived by the `vdb affected` pass — one row per
 | `cpe23` | text | cpe-lane identity — canonical, NVD-validated `vendor:product` |
 | `introduced` / `fixed` / `last_affected` | text | the version range (fixed = exclusive, last_affected = inclusive) |
 | `fix_kb` | text | remediation reference for the fix — a Microsoft MSRC KB (e.g. `KB5043050`); NULL for distro/ecosystem sources |
+| `source_data` | jsonb | source-specific range evidence; Microsoft rows retain ProductID, raw CPE/product, platform, architecture, and servicing channel applicability |
 | `version_scheme` | text | comparison scheme (`rpm`, `deb`, `semver`, `pep440`, `generic`, …) |
 | `status` | text | canonical VEX status (`not_affected` / `under_investigation` / `affected` / `fixed` / `wont_fix` / `unknown`) |
 | `status_raw` | text | the source's original wording |
