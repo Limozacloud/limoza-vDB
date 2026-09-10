@@ -470,7 +470,9 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
             return {"state": "incompatible", "source_data": source_data}
 
     required_arch = source_data.get("architecture")
-    host_arch = host.get("architecture")
+    # A component's own architecture (its CPE target_hw, in component_metadata) wins over the OS host
+    # arch: an x86 .NET runtime on an x64 host must be evaluated as x86, not x64.
+    host_arch = component_metadata.get("architecture") or host.get("architecture")
     if required_arch:
         if not host_arch or host_arch == "unknown":
             unresolved.append("architecture")

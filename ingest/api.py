@@ -151,11 +151,15 @@ def _bulk_match(components: list, host=None) -> list:
             # nothing consumes it. The .NET family rides in the CPE `other` field (MSRC-rolled value).
             metadata = {}
             if cpe.startswith("cpe:"):
+                q = cpe_qualifiers(cpe)
+                # A component's OWN architecture (its CPE target_hw) — e.g. an x86 .NET runtime on an
+                # x64 OS — is a per-component property and must drive this component's applicability,
+                # not the OS host arch. The matcher prefers component_metadata["architecture"].
+                if q.get("target_hw"):
+                    metadata["architecture"] = q["target_hw"]
                 cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
-                if cpe_prod in _DOTNET_CPE_PRODUCTS:
-                    other = cpe_qualifiers(cpe).get("other")
-                    if other:
-                        metadata["dotnet_framework_product"] = other
+                if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
+                    metadata["dotnet_framework_product"] = q["other"]
             context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
             k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
             if k not in cache:
