@@ -495,18 +495,21 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
 
     if source_data.get("windows_installation_type") == "server_core":
         installation_type = str(host.get("windows_installation_type") or "").lower()
-        if not installation_type:
-            unresolved.append("windows_installation_type")
-        elif "core" not in installation_type:
+        # No installation-type signal (a bare CPE / old scanner that does not stamp target_sw) → assume
+        # the common default (NOT Server Core), so a Core-only fix is excluded and the standard
+        # cumulative wins, rather than leaving the whole remediation ambiguous (the pre-applicability
+        # behaviour). A scanner that reports the type — server/server_core/client — is still evaluated
+        # precisely, since then installation_type is populated.
+        if "core" not in installation_type:
             return {"state": "incompatible", "source_data": source_data}
 
     if source_data.get("servicing_channel") == "hotpatch":
         edition = " ".join(str(host.get(key) or "") for key in (
             "windows_edition_id", "windows_composition_edition_id",
         )).lower()
-        if not edition.strip():
-            unresolved.append("windows_edition_id")
-        elif "azure" not in edition:
+        # No edition signal → assume NOT Azure Edition, so a Hotpatch-only fix is excluded and the
+        # standard servicing channel wins. A scanner that reports the edition is evaluated precisely.
+        if "azure" not in edition:
             return {"state": "incompatible", "source_data": source_data}
 
     return {
