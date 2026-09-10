@@ -157,6 +157,13 @@ def _bulk_match(components: list, host=None) -> list:
                 # not the OS host arch. The matcher prefers component_metadata["architecture"].
                 if q.get("target_hw"):
                     metadata["architecture"] = q["target_hw"]
+                # An OS-scoped component (a .NET runtime) carries its host OS product in target_sw
+                # (glance stamps windows_server_2022 etc.), so the deduped fleet request stays
+                # resolvable per host — the same .NET version on two OSes is two distinct CPEs. A
+                # windows_ OS component's target_sw is an installation type (server_core/server/
+                # client), not an OS product, so the "windows" prefix keeps them apart.
+                if q.get("target_sw", "").startswith("windows"):
+                    metadata["windows_product"] = q["target_sw"]
                 cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
                 if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
                     metadata["dotnet_framework_product"] = q["other"]

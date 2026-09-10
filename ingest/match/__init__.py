@@ -454,7 +454,10 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
     unresolved = []
 
     required_windows = source_data.get("windows_product")
-    host_windows = host.get("windows_product")
+    # A component can carry its OWN host-OS context (CPE target_sw, e.g. a .NET runtime stamped with
+    # windows_server_2022) so a deduped fleet request stays resolvable per host — prefer it over the
+    # ambient OS host product, which is undefined when the OS CPE is in a different batch.
+    host_windows = component_metadata.get("windows_product") or host.get("windows_product")
     if required_windows:
         if not host_windows:
             unresolved.append("windows_product")
