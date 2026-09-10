@@ -445,17 +445,6 @@ def cpe_qualifiers(cpe):
     return {k: v for k, v in fields.items() if v not in ("*", "-", "")}
 
 
-_WIN_PRODUCT_QUAL = re.compile(r"_(?:r2|sp\d+)$")
-
-
-def _norm_win_product(p):
-    """Compare Windows products on their shared base. MSRC folds an `_r2` / `_spN` qualifier into the
-    CPE update field, so our stored windows_product is the base (windows_server_2012) while glance
-    stamps the combined form (windows_server_2012_r2) into target_sw — strip the trailing qualifier so
-    the two agree instead of rejecting the correct R2 remediation as incompatible."""
-    return _WIN_PRODUCT_QUAL.sub("", (p or "").lower())
-
-
 def _microsoft_applicability(source_data, host=None, component_metadata=None):
     """Return applicability evidence for one MSRC product row."""
     if not isinstance(source_data, dict):
@@ -472,7 +461,7 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
     if required_windows:
         if not host_windows:
             unresolved.append("windows_product")
-        elif _norm_win_product(required_windows) != _norm_win_product(host_windows):
+        elif str(required_windows).lower() != str(host_windows).lower():
             return {"state": "incompatible", "source_data": source_data}
 
     required_framework = source_data.get("dotnet_framework_product")
