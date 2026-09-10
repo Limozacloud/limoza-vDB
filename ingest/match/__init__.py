@@ -414,9 +414,35 @@ def parse_cpe(cpe):
     p = (raw + ["*"] * 13)[:13]
     ver = p[5] if p[5] not in ("*", "-", "") else None
     upd = p[6] if p[6] not in ("-", "") else "*"      # keep update (e.g. r2); -/"" → *
+    prod = p[4]
+    # Modern .NET (Core) is filed under the shared `.net_framework` product in our affected rows —
+    # cpe_norm collapses `.net`/`dotnet_framework` on the storage side. Mirror that here so a scanned
+    # `.net` CPE (glance's modern-runtime identity) lands on those rows instead of missing entirely.
+    if p[3] == "microsoft" and prod in _MS_DOTNET_ALIASES:
+        prod = ".net_framework"
     # key mirrors cpe_norm._key: cpe:2.3:part:vendor:product:*:update:*…  (13 fields)
-    key = ":".join(["cpe", "2.3", p[2], p[3], p[4], "*", upd] + ["*"] * 6)
+    key = ":".join(["cpe", "2.3", p[2], p[3], prod, "*", upd] + ["*"] * 6)
     return key, ver
+
+
+# Microsoft .NET product aliases that our extractor (via cpe_norm) folds into `.net_framework`; the
+# match path mirrors the same fold so a scanned `.net` CPE resolves to the stored rows.
+_MS_DOTNET_ALIASES = {".net", "dotnet_framework"}
+
+
+def cpe_qualifiers(cpe):
+    """The applicability qualifiers glance encodes in a CPE's own 2.3 fields — sw_edition (10),
+    target_sw (11), target_hw (12), other (13) — so they survive the fleet-scale dedup that drops
+    the per-component metadata block. Returns the non-wildcard values, lowercased, as a dict (empty
+    when the CPE carries none). The caller maps them to the host/component context by product:
+    target_hw→architecture, target_sw→installation type, sw_edition→edition, other→azure edition
+    (Windows) / .NET family (.NET)."""
+    raw = (cpe or "").lower().split(":")
+    if len(raw) < 6 or raw[0] != "cpe":
+        return {}
+    p = (raw + ["*"] * 13)[:13]
+    fields = {"sw_edition": p[9], "target_sw": p[10], "target_hw": p[11], "other": p[12]}
+    return {k: v for k, v in fields.items() if v not in ("*", "-", "")}
 
 
 def _microsoft_applicability(source_data, host=None, component_metadata=None):

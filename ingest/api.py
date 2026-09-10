@@ -30,8 +30,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
 from ingest.core.db import get_conn
-from ingest.match import (_sharepoint_product_line, load_curations, match, parse_cpe,
-                          parse_purl, remediation)
+from ingest.match import (_sharepoint_product_line, cpe_qualifiers, load_curations, match,
+                          parse_cpe, parse_purl, remediation)
+
+# Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
+_DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -88,18 +91,27 @@ def _bulk_match(components: list, host=None) -> list:
         host = dict(host) if isinstance(host, dict) else {}
         for component in components:
             cpe = component.get("cpe") or ""
-            metadata = component.get("metadata")
-            if not cpe.startswith("cpe:") or not isinstance(metadata, dict):
+            if not cpe.startswith("cpe:"):
                 continue
             cpe_key, _ = parse_cpe(cpe)
             product = cpe_key.split(":")[4] if cpe_key else ""
-            if product.startswith("windows_"):
-                host.setdefault("windows_product", product)
-                for field in ("windows_edition_id", "windows_composition_edition_id",
-                              "windows_installation_type", "windows_product_name",
-                              "windows_display_version", "architecture"):
-                    if metadata.get(field) not in (None, ""):
-                        host.setdefault(field, metadata[field])
+            if not product.startswith("windows_"):
+                continue
+            host.setdefault("windows_product", product)
+            # The applicability context glance encodes in the CPE's own 2.3 fields
+            # (target_hw/target_sw/sw_edition/other) — the authoritative source: it is what survives
+            # the fleet-scale dedup that drops the per-component metadata block, and a CPE wildcard is
+            # a deliberate "any" (e.g. an unmapped arch → target_hw=*) that a stale metadata value
+            # must NOT override. Map each present qualifier to the host key the matcher reads.
+            quals = cpe_qualifiers(cpe)
+            if quals.get("target_hw"):
+                host.setdefault("architecture", quals["target_hw"])
+            if quals.get("target_sw"):
+                host.setdefault("windows_installation_type", quals["target_sw"])
+            if quals.get("sw_edition"):
+                host.setdefault("windows_edition_id", quals["sw_edition"])
+            if quals.get("other"):
+                host.setdefault("windows_composition_edition_id", quals["other"])
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -134,7 +146,16 @@ def _bulk_match(components: list, host=None) -> list:
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             preferred_track = c.get("servicing_track")
-            metadata = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+            # Applicability context is sourced entirely from the CPE — glance encodes it in the 2.3
+            # fields, and the per-component metadata block is dropped fleet-side before the matcher, so
+            # nothing consumes it. The .NET family rides in the CPE `other` field (MSRC-rolled value).
+            metadata = {}
+            if cpe.startswith("cpe:"):
+                cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
+                if cpe_prod in _DOTNET_CPE_PRODUCTS:
+                    other = cpe_qualifiers(cpe).get("other")
+                    if other:
+                        metadata["dotnet_framework_product"] = other
             context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
             k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
             if k not in cache:
