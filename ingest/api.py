@@ -88,30 +88,11 @@ def _bulk_match(components: list, host=None) -> list:
     try:
         curations = load_curations(conn)          # load once, apply to every component
         cache, repo_cache, results = {}, {}, []
-        host = dict(host) if isinstance(host, dict) else {}
-        for component in components:
-            cpe = component.get("cpe") or ""
-            if not cpe.startswith("cpe:"):
-                continue
-            cpe_key, _ = parse_cpe(cpe)
-            product = cpe_key.split(":")[4] if cpe_key else ""
-            if not product.startswith("windows_"):
-                continue
-            host.setdefault("windows_product", product)
-            # The applicability context glance encodes in the CPE's own 2.3 fields
-            # (target_hw/target_sw/sw_edition/other) — the authoritative source: it is what survives
-            # the fleet-scale dedup that drops the per-component metadata block, and a CPE wildcard is
-            # a deliberate "any" (e.g. an unmapped arch → target_hw=*) that a stale metadata value
-            # must NOT override. Map each present qualifier to the host key the matcher reads.
-            quals = cpe_qualifiers(cpe)
-            if quals.get("target_hw"):
-                host.setdefault("architecture", quals["target_hw"])
-            if quals.get("target_sw"):
-                host.setdefault("windows_installation_type", quals["target_sw"])
-            if quals.get("sw_edition"):
-                host.setdefault("windows_edition_id", quals["sw_edition"])
-            if quals.get("other"):
-                host.setdefault("windows_composition_edition_id", quals["other"])
+        # No shared batch-level host: a fleet-scale /match request is a deduplicated distinct-CPE list
+        # across MANY machines, so combining their Windows CPEs into one host contaminates results (an
+        # Azure record would make a Standard-Server record Hotpatch-applicable). Each component's
+        # applicability context is derived below solely from its OWN CPE — glance stamps every
+        # component's host OS product into its CPE target_sw, so each is self-contained.
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -146,27 +127,33 @@ def _bulk_match(components: list, host=None) -> list:
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             preferred_track = c.get("servicing_track")
-            # Applicability context is sourced entirely from the CPE — glance encodes it in the 2.3
-            # fields, and the per-component metadata block is dropped fleet-side before the matcher, so
-            # nothing consumes it. The .NET family rides in the CPE `other` field (MSRC-rolled value).
-            metadata = {}
+            # Per-component applicability context, derived ONLY from THIS component's own CPE (never
+            # shared across components). glance encodes it in the CPE's 2.3 fields; the metadata block
+            # is dropped fleet-side and no longer consumed.
+            host, metadata = {}, {}
             if cpe.startswith("cpe:"):
-                q = cpe_qualifiers(cpe)
-                # A component's OWN architecture (its CPE target_hw) — e.g. an x86 .NET runtime on an
-                # x64 OS — is a per-component property and must drive this component's applicability,
-                # not the OS host arch. The matcher prefers component_metadata["architecture"].
-                if q.get("target_hw"):
-                    metadata["architecture"] = q["target_hw"]
-                # An OS-scoped component (a .NET runtime) carries its host OS product in target_sw
-                # (glance stamps windows_server_2022 etc.), so the deduped fleet request stays
-                # resolvable per host — the same .NET version on two OSes is two distinct CPEs. A
-                # windows_ OS component's target_sw is an installation type (server_core/server/
-                # client), not an OS product, so the "windows" prefix keeps them apart.
-                if q.get("target_sw", "").startswith("windows"):
-                    metadata["windows_product"] = q["target_sw"]
                 cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
-                if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
-                    metadata["dotnet_framework_product"] = q["other"]
+                q = cpe_qualifiers(cpe)
+                if cpe_prod.startswith("windows_"):
+                    # An OS component: its own product + edition / installation type / Azure / arch.
+                    host["windows_product"] = cpe_prod
+                    if q.get("sw_edition"):
+                        host["windows_edition_id"] = q["sw_edition"]
+                    if q.get("target_sw"):
+                        host["windows_installation_type"] = q["target_sw"]
+                    if q.get("other"):
+                        host["windows_composition_edition_id"] = q["other"]
+                    if q.get("target_hw"):
+                        host["architecture"] = q["target_hw"]
+                else:
+                    # An app component (e.g. .NET): its host OS product is stamped in target_sw, its
+                    # own architecture in target_hw, its .NET family in other.
+                    if q.get("target_sw", "").startswith("windows"):
+                        host["windows_product"] = q["target_sw"]
+                    if q.get("target_hw"):
+                        host["architecture"] = q["target_hw"]
+                    if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
+                        metadata["dotnet_framework_product"] = q["other"]
             context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
             k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
             if k not in cache:
