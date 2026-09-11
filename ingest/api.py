@@ -147,9 +147,13 @@ def _bulk_match(components: list, host=None) -> list:
                         host["architecture"] = q["target_hw"]
                 else:
                     # An app component (e.g. .NET): its host OS product is stamped in target_sw, its
-                    # own architecture in target_hw, its .NET family in other.
+                    # own architecture in target_hw, its .NET family in other, and — since target_sw is
+                    # taken by the OS product — the host installation type (server/server_core/client)
+                    # in sw_edition, so a Server-Core-only .NET fix is scoped correctly.
                     if q.get("target_sw", "").startswith("windows"):
                         host["windows_product"] = q["target_sw"]
+                    if q.get("sw_edition"):
+                        host["windows_installation_type"] = q["sw_edition"]
                     if q.get("target_hw"):
                         host["architecture"] = q["target_hw"]
                     if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
