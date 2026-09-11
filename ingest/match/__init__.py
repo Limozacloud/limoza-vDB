@@ -958,10 +958,22 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
     return findings
 
 
-def _legacy_remediation(findings: dict):
+def _kb_num(kb):
+    """Numeric part of a Microsoft KB id (``KB5126050`` → 5126050), or -1. Higher ≈ newer for MS
+    updates — a reliable ordering when the fix build strings themselves are not comparable."""
+    m = re.search(r"\d+", kb or "")
+    return int(m.group(0)) if m else -1
+
+
+def _legacy_remediation(findings: dict, by_kb: bool = False):
     """The single highest fix that closes a matched component's fixable CVEs, and which CVE
     demands it — so a caller can say "upgrade to X → closes N". `findings` is the dict match()
     returns ({cve: [(src, status, fixed, fix_kb, scheme), …]}).
+
+    ``by_kb`` ranks by KB number instead of the fix build: .NET Framework stores its fixed builds in
+    several incompatible schemes (4.8.4xxx vs 4.8.09xxx vs malformed 10.0.x / 04590), so a version
+    compare mis-orders them (4.8.09214 > 4.8.4806) and can surface an older KB as "newest". The KB
+    number is monotonic with release date for Microsoft .NET cumulatives.
 
     Per CVE we take its one fix (first non-NULL). The max is computed with ONE comparator: rpm/deb
     keep their EVR comparator (epoch matters), everything else orders as `generic` (MavenVersion
@@ -988,10 +1000,13 @@ def _legacy_remediation(findings: dict):
         # per CVE take its HIGHEST fix, not an arbitrary first: Red Hat lists the same CVE across
         # several in-scope lines (flatpak's el9_6.1 EUS backport alongside the el9-base el9_8.1), and
         # the newest build is the real upgrade target — the first would surface a stale, insufficient
-        # fix. Same comparator choice as the cross-CVE max below.
-        sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
-        parse = [h for h in cand if _v(sc, h[2]) is not None]
-        pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
+        # fix. Same comparator choice as the cross-CVE max below. (h[3]=fix_kb, h[2]=fixed)
+        if by_kb:
+            pick = max(cand, key=lambda h: _kb_num(h[3]))
+        else:
+            sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
+            parse = [h for h in cand if _v(sc, h[2]) is not None]
+            pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
         fixable.append((cve, pick[2], pick[3], pick[4]))
     if ambiguous:
         return {"fixed": None, "fix_kb": None, "source_fix_kb": None, "cve": None,
@@ -999,6 +1014,10 @@ def _legacy_remediation(findings: dict):
                 "selection": "ambiguous", "candidates": ambiguous}
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
+    if by_kb:                                               # (cve, fixed, kb, scheme) — rank by KB
+        top = max(fixable, key=lambda x: _kb_num(x[2]))
+        return {"fixed": top[1], "fix_kb": top[2], "source_fix_kb": top[2],
+                "cve": top[0], "closes": len(fixable), "unfixed": unfixed, "selection": "applicable"}
     schemes = {s for *_, s in fixable}
     comp = "rpm" if "rpm" in schemes else "deb" if "deb" in schemes else "generic"
     parseable = [(cve, f, kb) for cve, f, kb, _s in fixable if _v(comp, f) is not None]
@@ -1059,7 +1078,11 @@ def remediation(findings: dict, component=None, version=None, preferred_track=No
         return None
     installed_version = _sql_server_component_version(component, version)
     if installed_version is None:
-        return _legacy_remediation(findings)
+        # .NET Framework fixed builds are stored in non-comparable schemes — rank its remediation by
+        # KB number instead of the build string (parse_cpe folds .net / .net_core → .net_framework).
+        by_kb = bool(component and component.startswith("cpe:")
+                     and (parse_cpe(component)[0] or "").split(":")[4:5] == [".net_framework"])
+        return _legacy_remediation(findings, by_kb=by_kb)
 
     by_track = {track: _sql_server_track_remediation(findings, track) for track in ("gdr", "cu")}
     inferred_track = _sql_server_track(installed_version)
