@@ -88,11 +88,13 @@ def _bulk_match(components: list, host=None) -> list:
     try:
         curations = load_curations(conn)          # load once, apply to every component
         cache, repo_cache, results = {}, {}, []
-        # No shared batch-level host: a fleet-scale /match request is a deduplicated distinct-CPE list
-        # across MANY machines, so combining their Windows CPEs into one host contaminates results (an
-        # Azure record would make a Standard-Server record Hotpatch-applicable). Each component's
-        # applicability context is derived below solely from its OWN CPE — glance stamps every
-        # component's host OS product into its CPE target_sw, so each is self-contained.
+        # An explicit request-level `host` is the fallback context (a caller may still pass one); each
+        # component's own CPE fields override it below. There is NO shared batch-level host DERIVED from
+        # other components' CPEs — a fleet-scale request is a deduplicated distinct-CPE list across many
+        # machines, so deriving a shared host from them would contaminate results (an Azure record
+        # making a Standard-Server record Hotpatch-applicable). glance stamps each component's own host
+        # context into its CPE, so each is self-contained; the request-host only fills genuine gaps.
+        request_host = dict(host) if isinstance(host, dict) else {}
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -127,10 +129,10 @@ def _bulk_match(components: list, host=None) -> list:
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             preferred_track = c.get("servicing_track")
-            # Per-component applicability context, derived ONLY from THIS component's own CPE (never
-            # shared across components). glance encodes it in the CPE's 2.3 fields; the metadata block
-            # is dropped fleet-side and no longer consumed.
-            host, metadata = {}, {}
+            # Per-component applicability context: start from the request-host fallback, then let THIS
+            # component's own CPE fields override it (never derived from other components' CPEs). glance
+            # encodes the context in the CPE's 2.3 fields; the metadata block is dropped fleet-side.
+            host, metadata = dict(request_host), {}
             if cpe.startswith("cpe:"):
                 cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
                 q = cpe_qualifiers(cpe)
