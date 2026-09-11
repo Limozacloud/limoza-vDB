@@ -414,9 +414,35 @@ def parse_cpe(cpe):
     p = (raw + ["*"] * 13)[:13]
     ver = p[5] if p[5] not in ("*", "-", "") else None
     upd = p[6] if p[6] not in ("-", "") else "*"      # keep update (e.g. r2); -/"" → *
+    prod = p[4]
+    # Modern .NET (Core) is filed under the shared `.net_framework` product in our affected rows —
+    # cpe_norm collapses `.net`/`dotnet_framework` on the storage side. Mirror that here so a scanned
+    # `.net` CPE (glance's modern-runtime identity) lands on those rows instead of missing entirely.
+    if p[3] == "microsoft" and prod in _MS_DOTNET_ALIASES:
+        prod = ".net_framework"
     # key mirrors cpe_norm._key: cpe:2.3:part:vendor:product:*:update:*…  (13 fields)
-    key = ":".join(["cpe", "2.3", p[2], p[3], p[4], "*", upd] + ["*"] * 6)
+    key = ":".join(["cpe", "2.3", p[2], p[3], prod, "*", upd] + ["*"] * 6)
     return key, ver
+
+
+# Microsoft .NET product aliases that our extractor (via cpe_norm) folds into `.net_framework`; the
+# match path mirrors the same fold so a scanned `.net` CPE resolves to the stored rows.
+_MS_DOTNET_ALIASES = {".net", "dotnet_framework"}
+
+
+def cpe_qualifiers(cpe):
+    """The applicability qualifiers glance encodes in a CPE's own 2.3 fields — sw_edition (10),
+    target_sw (11), target_hw (12), other (13) — so they survive the fleet-scale dedup that drops
+    the per-component metadata block. Returns the non-wildcard values, lowercased, as a dict (empty
+    when the CPE carries none). The caller maps them to the host/component context by product:
+    target_hw→architecture, target_sw→installation type, sw_edition→edition, other→azure edition
+    (Windows) / .NET family (.NET)."""
+    raw = (cpe or "").lower().split(":")
+    if len(raw) < 6 or raw[0] != "cpe":
+        return {}
+    p = (raw + ["*"] * 13)[:13]
+    fields = {"sw_edition": p[9], "target_sw": p[10], "target_hw": p[11], "other": p[12]}
+    return {k: v for k, v in fields.items() if v not in ("*", "-", "")}
 
 
 def _microsoft_applicability(source_data, host=None, component_metadata=None):
@@ -428,7 +454,10 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
     unresolved = []
 
     required_windows = source_data.get("windows_product")
-    host_windows = host.get("windows_product")
+    # A component can carry its OWN host-OS context (CPE target_sw, e.g. a .NET runtime stamped with
+    # windows_server_2022) so a deduped fleet request stays resolvable per host — prefer it over the
+    # ambient OS host product, which is undefined when the OS CPE is in a different batch.
+    host_windows = component_metadata.get("windows_product") or host.get("windows_product")
     if required_windows:
         if not host_windows:
             unresolved.append("windows_product")
@@ -444,7 +473,9 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
             return {"state": "incompatible", "source_data": source_data}
 
     required_arch = source_data.get("architecture")
-    host_arch = host.get("architecture")
+    # A component's own architecture (its CPE target_hw, in component_metadata) wins over the OS host
+    # arch: an x86 .NET runtime on an x64 host must be evaluated as x86, not x64.
+    host_arch = component_metadata.get("architecture") or host.get("architecture")
     if required_arch:
         if not host_arch or host_arch == "unknown":
             unresolved.append("architecture")
@@ -453,6 +484,9 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
 
     if source_data.get("windows_installation_type") == "server_core":
         installation_type = str(host.get("windows_installation_type") or "").lower()
+        # Missing installation-type signal stays UNKNOWN (not incompatible): a context-less host must
+        # not have a Core-only fix silently discarded, which would hide the vulnerability. Only a
+        # reported, conflicting type (server/client) makes it incompatible.
         if not installation_type:
             unresolved.append("windows_installation_type")
         elif "core" not in installation_type:
@@ -462,6 +496,8 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
         edition = " ".join(str(host.get(key) or "") for key in (
             "windows_edition_id", "windows_composition_edition_id",
         )).lower()
+        # Missing edition signal stays UNKNOWN, not incompatible (see above): don't hide a Hotpatch-only
+        # CVE for a context-less host. Only a reported, non-Azure edition makes it incompatible.
         if not edition.strip():
             unresolved.append("windows_edition_id")
         elif "azure" not in edition:
@@ -922,10 +958,22 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
     return findings
 
 
-def _legacy_remediation(findings: dict):
+def _kb_num(kb):
+    """Numeric part of a Microsoft KB id (``KB5126050`` → 5126050), or -1. Higher ≈ newer for MS
+    updates — a reliable ordering when the fix build strings themselves are not comparable."""
+    m = re.search(r"\d+", kb or "")
+    return int(m.group(0)) if m else -1
+
+
+def _legacy_remediation(findings: dict, by_kb: bool = False):
     """The single highest fix that closes a matched component's fixable CVEs, and which CVE
     demands it — so a caller can say "upgrade to X → closes N". `findings` is the dict match()
     returns ({cve: [(src, status, fixed, fix_kb, scheme), …]}).
+
+    ``by_kb`` ranks by KB number instead of the fix build: .NET Framework stores its fixed builds in
+    several incompatible schemes (4.8.4xxx vs 4.8.09xxx vs malformed 10.0.x / 04590), so a version
+    compare mis-orders them (4.8.09214 > 4.8.4806) and can surface an older KB as "newest". The KB
+    number is monotonic with release date for Microsoft .NET cumulatives.
 
     Per CVE we take its one fix (first non-NULL). The max is computed with ONE comparator: rpm/deb
     keep their EVR comparator (epoch matters), everything else orders as `generic` (MavenVersion
@@ -952,10 +1000,13 @@ def _legacy_remediation(findings: dict):
         # per CVE take its HIGHEST fix, not an arbitrary first: Red Hat lists the same CVE across
         # several in-scope lines (flatpak's el9_6.1 EUS backport alongside the el9-base el9_8.1), and
         # the newest build is the real upgrade target — the first would surface a stale, insufficient
-        # fix. Same comparator choice as the cross-CVE max below.
-        sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
-        parse = [h for h in cand if _v(sc, h[2]) is not None]
-        pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
+        # fix. Same comparator choice as the cross-CVE max below. (h[3]=fix_kb, h[2]=fixed)
+        if by_kb:
+            pick = max(cand, key=lambda h: _kb_num(h[3]))
+        else:
+            sc = "rpm" if any(h[4] == "rpm" for h in cand) else "deb" if any(h[4] == "deb" for h in cand) else "generic"
+            parse = [h for h in cand if _v(sc, h[2]) is not None]
+            pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
         fixable.append((cve, pick[2], pick[3], pick[4]))
     if ambiguous:
         return {"fixed": None, "fix_kb": None, "source_fix_kb": None, "cve": None,
@@ -963,6 +1014,10 @@ def _legacy_remediation(findings: dict):
                 "selection": "ambiguous", "candidates": ambiguous}
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
+    if by_kb:                                               # (cve, fixed, kb, scheme) — rank by KB
+        top = max(fixable, key=lambda x: _kb_num(x[2]))
+        return {"fixed": top[1], "fix_kb": top[2], "source_fix_kb": top[2],
+                "cve": top[0], "closes": len(fixable), "unfixed": unfixed, "selection": "applicable"}
     schemes = {s for *_, s in fixable}
     comp = "rpm" if "rpm" in schemes else "deb" if "deb" in schemes else "generic"
     parseable = [(cve, f, kb) for cve, f, kb, _s in fixable if _v(comp, f) is not None]
@@ -1023,7 +1078,11 @@ def remediation(findings: dict, component=None, version=None, preferred_track=No
         return None
     installed_version = _sql_server_component_version(component, version)
     if installed_version is None:
-        return _legacy_remediation(findings)
+        # .NET Framework fixed builds are stored in non-comparable schemes — rank its remediation by
+        # KB number instead of the build string (parse_cpe folds .net / .net_core → .net_framework).
+        by_kb = bool(component and component.startswith("cpe:")
+                     and (parse_cpe(component)[0] or "").split(":")[4:5] == [".net_framework"])
+        return _legacy_remediation(findings, by_kb=by_kb)
 
     by_track = {track: _sql_server_track_remediation(findings, track) for track in ("gdr", "cu")}
     inferred_track = _sql_server_track(installed_version)

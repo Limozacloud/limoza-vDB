@@ -105,9 +105,11 @@ def _product_cpes(doc: dict) -> dict:
 
 def _platform_from_name(name: str) -> str | None:
     value = name.lower()
-    server = re.search(r"windows server (\d{4})", value)
+    server = re.search(r"windows server (\d{4})(\s*r2)?", value)
     if server:
-        return f"windows_server_{server.group(1)}"
+        # Preserve the R2 identity: Server 2012 and 2012 R2 are distinct products with distinct KBs,
+        # so the windows_product token must keep them apart (windows_server_2012 vs …_2012_r2).
+        return f"windows_server_{server.group(1)}" + ("_r2" if server.group(2) else "")
     desktop = re.search(r"windows (\d+) version ([0-9a-z]+)", value)
     if desktop:
         return f"windows_{desktop.group(1)}_{desktop.group(2)}"

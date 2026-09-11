@@ -30,8 +30,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
 from ingest.core.db import get_conn
-from ingest.match import (_sharepoint_product_line, load_curations, match, parse_cpe,
-                          parse_purl, remediation)
+from ingest.match import (_sharepoint_product_line, cpe_qualifiers, load_curations, match,
+                          parse_cpe, parse_purl, remediation)
+
+# Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
+_DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -85,21 +88,13 @@ def _bulk_match(components: list, host=None) -> list:
     try:
         curations = load_curations(conn)          # load once, apply to every component
         cache, repo_cache, results = {}, {}, []
-        host = dict(host) if isinstance(host, dict) else {}
-        for component in components:
-            cpe = component.get("cpe") or ""
-            metadata = component.get("metadata")
-            if not cpe.startswith("cpe:") or not isinstance(metadata, dict):
-                continue
-            cpe_key, _ = parse_cpe(cpe)
-            product = cpe_key.split(":")[4] if cpe_key else ""
-            if product.startswith("windows_"):
-                host.setdefault("windows_product", product)
-                for field in ("windows_edition_id", "windows_composition_edition_id",
-                              "windows_installation_type", "windows_product_name",
-                              "windows_display_version", "architecture"):
-                    if metadata.get(field) not in (None, ""):
-                        host.setdefault(field, metadata[field])
+        # An explicit request-level `host` is the fallback context (a caller may still pass one); each
+        # component's own CPE fields override it below. There is NO shared batch-level host DERIVED from
+        # other components' CPEs — a fleet-scale request is a deduplicated distinct-CPE list across many
+        # machines, so deriving a shared host from them would contaminate results (an Azure record
+        # making a Standard-Server record Hotpatch-applicable). glance stamps each component's own host
+        # context into its CPE, so each is self-contained; the request-host only fills genuine gaps.
+        request_host = dict(host) if isinstance(host, dict) else {}
         for c in components:
             purl, cpe = c.get("purl") or "", c.get("cpe") or ""
             # a generic purl (pkg:generic/…) carries no ecosystem and never matches; prefer
@@ -134,7 +129,37 @@ def _bulk_match(components: list, host=None) -> list:
                             or (ident.startswith("pkg:deb/") and upstream.startswith("linux"))):
                         continue
             preferred_track = c.get("servicing_track")
-            metadata = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+            # Per-component applicability context: start from the request-host fallback, then let THIS
+            # component's own CPE fields override it (never derived from other components' CPEs). glance
+            # encodes the context in the CPE's 2.3 fields; the metadata block is dropped fleet-side.
+            host, metadata = dict(request_host), {}
+            if cpe.startswith("cpe:"):
+                cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
+                q = cpe_qualifiers(cpe)
+                if cpe_prod.startswith("windows_"):
+                    # An OS component: its own product + edition / installation type / Azure / arch.
+                    host["windows_product"] = cpe_prod
+                    if q.get("sw_edition"):
+                        host["windows_edition_id"] = q["sw_edition"]
+                    if q.get("target_sw"):
+                        host["windows_installation_type"] = q["target_sw"]
+                    if q.get("other"):
+                        host["windows_composition_edition_id"] = q["other"]
+                    if q.get("target_hw"):
+                        host["architecture"] = q["target_hw"]
+                else:
+                    # An app component (e.g. .NET): its host OS product is stamped in target_sw, its
+                    # own architecture in target_hw, its .NET family in other, and — since target_sw is
+                    # taken by the OS product — the host installation type (server/server_core/client)
+                    # in sw_edition, so a Server-Core-only .NET fix is scoped correctly.
+                    if q.get("target_sw", "").startswith("windows"):
+                        host["windows_product"] = q["target_sw"]
+                    if q.get("sw_edition"):
+                        host["windows_installation_type"] = q["sw_edition"]
+                    if q.get("target_hw"):
+                        host["architecture"] = q["target_hw"]
+                    if cpe_prod in _DOTNET_CPE_PRODUCTS and q.get("other"):
+                        metadata["dotnet_framework_product"] = q["other"]
             context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
             k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
             if k not in cache:
