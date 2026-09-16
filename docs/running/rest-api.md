@@ -50,10 +50,10 @@ Reviewed compatibility aliases may map specific legacy identities to their canon
 the primary match finds nothing. `component` is the identity the matcher **resolved** (a purl or
 a cpe — a generic purl loses to a real ecosystem purl or a cpe). `status` is `vulnerable` |
 `compliant` | `unknown` (the
-component couldn't be parsed/compared). For an applicable Microsoft CPE finding, `fix_kb` and
-`source_fix_kb` carry the source MSRC article. This is not necessarily the package Windows Update
+component couldn't be parsed/compared). For an applicable Microsoft CPE finding, `fix_kb`
+carries the source MSRC article. This is not necessarily the package Windows Update
 offers: cumulative and umbrella updates can use another KB. When product/platform/channel context
-is incomplete, `selection` is `ambiguous`, both target fields are null, and `candidates` retains
+is incomplete, `selection` is `ambiguous`, `fix_kb` is null, and `candidates` retains
 the source evidence.
 
 ### Temporary legacy identity aliases
@@ -79,14 +79,13 @@ fix** that closes the component's fixable CVEs — "upgrade to X → done":
 | Field | Meaning |
 |-------|---------|
 | `fixed` | the version to upgrade to (the max fix across all the component's CVEs) |
-| `fix_kb` | backward-compatible source MSRC KB, or `null` when ambiguous |
-| `source_fix_kb` | source MSRC KB that establishes the fixed state |
+| `fix_kb` | source MSRC KB that establishes the fixed state, or `null` when ambiguous |
 | `selection` | `applicable` or `ambiguous` for context-sensitive Microsoft products |
 | `cve` | the CVE that demands this highest version |
 | `closes` | how many of the component's CVEs this upgrade closes |
 | `unfixed` | CVEs with **no** fix available — an upgrade can't close these (so "closes" never over-promises) |
 
-Example: a Windows host can return `{ "fixed": "10.0.20348.5256", "source_fix_kb": "KB5094128", "selection": "applicable", "closes": 2148, "unfixed": 0 }`.
+Example: a Windows host can return `{ "fixed": "10.0.20348.5256", "fix_kb": "KB5094128", "selection": "applicable", "closes": 2148, "unfixed": 0 }`.
 Use Windows Update to select the currently applicable install package. `null` on compliant
 components.
 

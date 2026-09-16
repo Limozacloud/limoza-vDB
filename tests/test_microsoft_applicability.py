@@ -176,7 +176,7 @@ def test_missing_applicability_context_returns_no_target_kb():
     assert result["selection"] == "ambiguous"
     assert result["fixed"] is None
     assert result["fix_kb"] is None
-    assert result["candidates"][0]["source_fix_kb"] == "KB5120705"
+    assert result["candidates"][0]["fix_kb"] == "KB5120705"
 
 
 def test_product_variants_with_same_cpe_and_build_are_preserved(monkeypatch):
