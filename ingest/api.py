@@ -67,14 +67,13 @@ def _fmt(findings: dict) -> list:
         if selected is None and applicable:
             selected = applicable[0]
         candidates = [] if selected else [
-            {"fixed": hit[2], "source_fix_kb": hit[3],
+            {"fixed": hit[2], "fix_kb": hit[3],
              "applicability": hit[5].get("source_data", {})}
             for hit in hits if len(hit) > 5 and hit[5].get("state") == "unknown"
         ]
         out.append({"id": cid,
                     "fixed": selected[2] if selected else None,
                     "fix_kb": selected[3] if selected else None,
-                    "source_fix_kb": selected[3] if selected else None,
                     "selection": "applicable" if selected else "ambiguous",
                     "candidates": candidates,
                     "status": hits[0][1],

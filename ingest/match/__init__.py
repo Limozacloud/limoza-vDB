@@ -518,7 +518,7 @@ def _candidate(hit) -> dict:
     evidence = hit[5].get("source_data", {}) if len(hit) > 5 and hit[5] else {}
     return {
         "fixed": hit[2],
-        "source_fix_kb": hit[3],
+        "fix_kb": hit[3],
         "applicability": evidence,
     }
 
@@ -1009,14 +1009,14 @@ def _legacy_remediation(findings: dict, by_kb: bool = False):
             pick = max(parse, key=lambda h: _v(sc, h[2])) if parse else cand[0]
         fixable.append((cve, pick[2], pick[3], pick[4]))
     if ambiguous:
-        return {"fixed": None, "fix_kb": None, "source_fix_kb": None, "cve": None,
+        return {"fixed": None, "fix_kb": None, "cve": None,
                 "closes": len(fixable), "unfixed": unfixed,
                 "selection": "ambiguous", "candidates": ambiguous}
     if not fixable:
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": 0, "unfixed": unfixed}
     if by_kb:                                               # (cve, fixed, kb, scheme) — rank by KB
         top = max(fixable, key=lambda x: _kb_num(x[2]))
-        return {"fixed": top[1], "fix_kb": top[2], "source_fix_kb": top[2],
+        return {"fixed": top[1], "fix_kb": top[2],
                 "cve": top[0], "closes": len(fixable), "unfixed": unfixed, "selection": "applicable"}
     schemes = {s for *_, s in fixable}
     comp = "rpm" if "rpm" in schemes else "deb" if "deb" in schemes else "generic"
@@ -1024,7 +1024,7 @@ def _legacy_remediation(findings: dict, by_kb: bool = False):
     if not parseable:                                       # nothing comparable → don't invent a max
         return {"fixed": None, "fix_kb": None, "cve": None, "closes": len(fixable), "unfixed": unfixed}
     top = max(parseable, key=lambda x: _v(comp, x[1]))
-    return {"fixed": top[1], "fix_kb": top[2], "source_fix_kb": top[2],
+    return {"fixed": top[1], "fix_kb": top[2],
             "cve": top[0], "closes": len(fixable), "unfixed": unfixed,
             "selection": "applicable"}
 
