@@ -1,5 +1,5 @@
 # ── Stage 1: build trivy-db-to ────────────────────────────────────────────────
-FROM golang:1.26-alpine AS go-builder
+FROM golang:1.27-alpine AS go-builder
 RUN go install github.com/k1LoW/trivy-db-to@latest
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
