@@ -543,13 +543,14 @@ def _cpe_verdict(installed, rows, version_normalizer=None, preserve_fixes=False,
     Returns [(src, status, fixed, fix_kb, scheme, applicability), …] or [].
     """
     normalize = version_normalizer or (lambda value: value)
-    # Track enforcement is currently verified only for SQL Server 2019 (15.x).
-    # Other SQL releases may still preserve their parallel fix candidates for an
-    # ambiguous remediation response, but must retain the historical "any reachable
-    # parallel fix clears the range" verdict until their build families are classified.
-    # Otherwise a patched GDR host is falsely flagged solely because a higher CU fix
-    # exists on a different line.
-    track_aware = preserve_fixes and _ms_major(installed) == "15"
+    # Track enforcement covers every SQL Server release whose GDR/CU build families are
+    # verified (2017/2019/2022/2025 — see _SQL_TRACK_BANDS). A classified host is compared
+    # only against fixes on its OWN servicing line, so a host current on GDR is not flagged
+    # by a higher CU fix (and vice versa) — the false negative a host on the CU line hit,
+    # cleared merely for exceeding the far lower GDR fix. Releases we cannot classify yet
+    # (2016's service-pack model, RTM) fall through to the conservative "any outstanding
+    # parallel fix keeps the CVE affected" verdict below rather than silently clearing.
+    track_aware = preserve_fixes and _ms_major(installed) in _MS_SQL_YEAR
     groups = {}
     for r in rows:
         if r[5] not in _SKIP:
@@ -672,34 +673,39 @@ def _sql_server_version_for_compare(version):
     return _sql_server_engine_version(version) or version
 
 
-def _sql_server_track(version):
-    """Return the SQL Server servicing track for a non-RTM build, if known.
+# SQL Server ships two parallel servicing lines per release — GDR (security-only) and CU
+# (cumulative) — with DISTINCT third-octet build families that differ per release. Keyed by the
+# release major, mapping the third-octet thousands band → track, grounded in the observed affected
+# data (e.g. 2019 GDR 15.0.2xxx / CU 15.0.4xxx; 2022 GDR 16.0.1xxx / CU 16.0.4xxx). SQL Server 2016
+# (13.x) uses a service-pack servicing model (bands 5/6/7) that does not map to a two-line GDR/CU
+# split, so it is deliberately left out and stays unclassified (conservative verdict).
+_SQL_TRACK_BANDS = {
+    "14": {2: "gdr", 3: "cu"},   # 2017
+    "15": {2: "gdr", 4: "cu"},   # 2019
+    "16": {1: "gdr", 4: "cu"},   # 2022
+    "17": {1: "gdr", 4: "cu"},   # 2025
+}
 
-    The current affected-data representation proves the GDR/CU build families for SQL
-    Server 2019: GDR fixes use ``15.0.2xxx`` and CU fixes use ``15.0.4xxx``. RTM
-    ``15.0.2000.5`` predates the choice of a servicing track, so callers must select a
-    track explicitly rather than silently treating RTM as GDR. Other editions remain
-    unclassified until their build families are verified.
+
+def _sql_server_track(version):
+    """Return the SQL Server servicing track ('gdr' or 'cu') for a classifiable non-RTM build.
+
+    The GDR/CU build families differ per release, so the line is identified by the release major
+    plus the third-octet thousands band (see ``_SQL_TRACK_BANDS``). RTM (``15.0.2000.5``) predates
+    the choice of a servicing track, so callers must select one explicitly rather than silently
+    treating RTM as GDR; releases whose families are not verified (2016's service-pack model) stay
+    unclassified. Returns None when the track cannot be proven.
     """
     engine = _sql_server_engine_version(version)
     if not engine:
         return None
     parts = engine.split(".")
-    if len(parts) < 3 or parts[:2] != ["15", "0"] or not parts[2].isdigit():
+    if len(parts) < 3 or parts[1] != "0" or not parts[2].isdigit():
         return None
-    build = int(parts[2])
-    if build == 2000:
-        return None
-    if 2000 < build < 3000:
-        return "gdr"
-    if build >= 4000:
-        return "cu"
-    return None
-
-
-def _sql_server_2019_track(version):
-    """Backward-compatible name for the verified SQL Server 2019 classifier."""
-    return _sql_server_track(version)
+    major, build = parts[0], int(parts[2])
+    if major == "15" and build == 2000:
+        return None                                        # 2019 RTM — intentionally ambiguous
+    return _SQL_TRACK_BANDS.get(major, {}).get(build // 1000)
 
 
 def _ms_family(product):
@@ -1041,7 +1047,7 @@ def _sql_server_component_version(component, version):
 
 
 def _sql_server_track_remediation(findings: dict, track: str):
-    """Return the highest usable remediation on one SQL Server 2019 servicing track.
+    """Return the highest usable remediation on one SQL Server servicing track (GDR or CU).
 
     A CVE with no candidate on ``track`` is deliberately counted as unresolved. A CU-only
     row must not be claimed as remediated by a GDR update (or vice versa) unless ingestion
@@ -1049,7 +1055,7 @@ def _sql_server_track_remediation(findings: dict, track: str):
     """
     fixable, unfixed = [], 0
     for cve, hits in findings.items():
-        candidates = [hit for hit in hits if hit[2] and _sql_server_2019_track(hit[2]) == track]
+        candidates = [hit for hit in hits if hit[2] and _sql_server_track(hit[2]) == track]
         parsed = [(hit, _v("generic", _sql_server_version_for_compare(hit[2]))) for hit in candidates]
         parsed = [(hit, fixed) for hit, fixed in parsed if fixed is not None]
         if not parsed:
@@ -1068,11 +1074,13 @@ def _sql_server_track_remediation(findings: dict, track: str):
 def remediation(findings: dict, component=None, version=None, preferred_track=None):
     """Return a component remediation, preserving distinct SQL Server GDR/CU paths.
 
-    Non-SQL components retain the historical single-highest-fix result. SQL Server 2019
-    returns a backward-compatible top-level remediation only when the requested or installed
-    build identifies a verified servicing track. Other SQL Server editions remain ambiguous
-    until their track classifier is verified. RTM is intentionally ambiguous: callers receive
-    both alternatives in ``by_track`` and must select a policy/track explicitly.
+    Non-SQL components retain the historical single-highest-fix result. A classifiable SQL
+    Server host (2017/2019/2022/2025) returns a backward-compatible top-level remediation on
+    the servicing track its installed build identifies. An RTM / pre-servicing host has not
+    committed to a line, so it defaults to the minimal security-only GDR target — which still
+    closes every CVE, the same default scanners use — as long as GDR is a real forward step.
+    Builds we cannot classify at all (2016's service-pack model) stay ambiguous. ``by_track``
+    always carries both alternatives so a caller can override the default.
     """
     if not findings:
         return None
@@ -1088,9 +1096,19 @@ def remediation(findings: dict, component=None, version=None, preferred_track=No
     inferred_track = _sql_server_track(installed_version)
     requested_track = preferred_track if preferred_track in by_track else None
     selected_track = inferred_track or requested_track
+    selection = "installed" if inferred_track else "requested" if requested_track else None
+    if not selected_track:
+        # RTM / pre-servicing host: it has not committed to a servicing line, so default to the
+        # minimal security-only path (GDR) that still closes every CVE — provided GDR is an actual
+        # forward step for this build, so a higher unclassifiable build is never sent to a lower one.
+        gdr_fixed = (by_track.get("gdr") or {}).get("fixed")
+        iv = _v("generic", _sql_server_version_for_compare(installed_version))
+        gv = _v("generic", _sql_server_version_for_compare(gdr_fixed)) if gdr_fixed else None
+        if gv is not None and iv is not None and iv < gv:
+            selected_track, selection = "gdr", "rtm_default_gdr"
     if selected_track in by_track:
         selected = dict(by_track[selected_track])
-        selected["selection"] = "installed" if inferred_track else "requested"
+        selected["selection"] = selection
     else:
         selected = {"fixed": None, "fix_kb": None, "cve": None, "closes": 0,
                     "unfixed": len(findings), "track": None, "selection": "ambiguous"}
