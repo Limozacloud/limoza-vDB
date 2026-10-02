@@ -20,6 +20,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # RHEL-family only: latest-minor z-stream fix instead of the reported minor. Non-EUS fleets
+      # only, fleet-wide. Default off. See docs/running/rest-api.md.
+      MATCH_RHEL_ASSUME_LATEST_MINOR: ${MATCH_RHEL_ASSUME_LATEST_MINOR:-false}
     volumes:
       - epss:/data/epss
       - kev:/data/kev
@@ -87,6 +90,9 @@ services:
       POSTGRES_DSN:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
       API_PORT:          "8770"
+      # RHEL-family only: latest-minor z-stream fix instead of the reported minor. Non-EUS fleets
+      # only, fleet-wide. Default off. See docs/running/rest-api.md.
+      MATCH_RHEL_ASSUME_LATEST_MINOR: ${MATCH_RHEL_ASSUME_LATEST_MINOR:-false}
     command: api
     ports:
       - "8770:8770"

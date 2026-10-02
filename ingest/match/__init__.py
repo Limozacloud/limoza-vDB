@@ -9,6 +9,7 @@ A component is a purl (glance's output) with a version, optionally a release:
     pkg:deb/ubuntu/curl@7.81.0-1?distro=jammy    → deb, release=jammy
     pkg:pypi/django@2.0                          → ecosystem pypi, no release
 """
+import os
 import re
 from urllib.parse import unquote
 
@@ -36,6 +37,18 @@ _SKIP = {"not_affected", "under_investigation", "unknown", "wont_fix"}
 # "deferred", which already map to wont_fix. Matched against affected.status_raw (Red Hat/clones).
 _SKIP_RAW = {"Fix deferred"}
 _DIST = re.compile(r"\.el(\d+(?:_\d+)?)")
+
+# Central switch — RHEL family only. OFF by default: a RHEL host is scoped strictly to the minor
+# line(s) it reports (its own dist tag + the OS minor from distro=), which is correct for an
+# EUS-pinned host that cannot move off that minor. When MATCH_RHEL_ASSUME_LATEST_MINOR is enabled,
+# the host is instead matched against EVERY minor line of its major (elN + all elN_M), treating it
+# as a normal non-EUS system that `yum update` floats to the latest minor — so it is offered the
+# latest z-stream fix (matching vendor scanners like Tenable) rather than being capped at its
+# reported minor. Never touches SUSE (service-pack codestreams) or Debian/Ubuntu (releases do not
+# float); see the rpm branch in match().
+_RHEL_ASSUME_LATEST_MINOR = os.environ.get("MATCH_RHEL_ASSUME_LATEST_MINOR", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 
 # Ubuntu's "-signed" kernel packages (secure-boot signature wrapper around a flavor's real
 # build, e.g. linux-image-*-gcp → upstream=linux-signed-gcp-6.17) are never tracked as their
@@ -887,7 +900,12 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
         #   rebuild `sll*` product nor the release-less noise. Precise scoping is done per-row below.
         tail, extra = "AND source = 'suse' AND release IS NOT NULL AND release NOT LIKE 'sll%%'", ()
     elif isinstance(rel, list):                     # rpm → match the major + minor streams
-        tail, extra = "AND release = ANY(%s)", (rel,)
+        if _RHEL_ASSUME_LATEST_MINOR:               # central switch: whole major, every minor line
+            # rel[0] is the base `elN` stream (always first from _el_streams); split_part keeps every
+            # row whose release base is that major (elN and all elN_M) so the latest minor's fix wins.
+            tail, extra = "AND split_part(release, '_', 1) = %s", (rel[0],)
+        else:
+            tail, extra = "AND release = ANY(%s)", (rel,)
         if sources is not None:                     # scope to the host's vendor (+ RH baseline)
             tail, extra = tail + " AND source = ANY(%s)", extra + (sources,)
     else:                                           # deb / ecosystem → exact release or NULL
