@@ -62,12 +62,13 @@ Until the next Glance release refreshes host inventory, `/match` also has a narr
 fallback for components that are **already present in the request** but have an older generic
 PURL/name and no primary match. It never discovers a file or creates a host component.
 
-| Existing identity | Temporary canonical CPE |
+| Existing identity | Temporary canonical identity |
 | --- | --- |
 | `pkg:maven/log4j/log4j@<version>` or matching `log4j-<version>.jar` name | Apache Log4j |
 | `pkg:generic/curl@<version>` or `curl.exe` | haxx curl |
 | `pkg:generic/odbc-driver-sql-server@<version>` or `msodbcsql17.dll`/`msodbcsql18.dll` | Microsoft ODBC Driver for SQL Server |
 | `pkg:generic/oledb-driver-sql-server@<version>` or `msoledbsql.dll` | Microsoft OLE DB Driver for SQL Server |
+| `pkg:npm/@next/env@<version>` | `pkg:npm/next@<version>` (the env loader versions in lockstep with Next.js, which carries the advisories) |
 
 The response identifies a successful fallback in `identity_source`; values beginning with
 `legacy_` are temporary compatibility mappings. They are retired after the matching Glance
