@@ -41,13 +41,21 @@ _BUILD = re.compile(r"^\d+(\.\d+)+$")
 # Rolling products: no parallel supported versions and no back-ports — MSRC gives only the
 # FixedBuild ("update to X or later"), so the whole history below the fix is affected and the
 # major.minor scope (which fragments the single line → false negatives) is wrong. Two flavours:
-#   _ROLLING_FULL  — ONE monotonic scheme (Chromium majors 91→148): fully cumulative, introduced="0"
-#                    so any older build matches a later fix.
+#   _ROLLING_FULL  — ONE monotonic scheme, fully cumulative, introduced="0" so any older build
+#                    matches a later fix. Covers Chromium (edge_chromium, majors 91→148) and
+#                    standalone single-line apps/agents that ship one linear version train with no
+#                    parallel supported versions and no back-ports — azure_data_studio (1.x),
+#                    azure_site_recovery (9.x). Without this they hit the default major.minor scope,
+#                    which keys `introduced` to the fix's own minor and so drops every host on an
+#                    earlier minor (e.g. ADS 1.47.0 missed CVE-2024-26203, fixed 1.48.0).
 #   _ROLLING_MAJOR — the CPE mixes SCHEMES (VS Code editor 1.x + extensions 0.x/2024.x/2025.x;
 #                    legacy EdgeHTML 10.x + Chromium 97+): scope to the major so a host is cumulative
 #                    WITHIN its scheme but can't cross-match another (1.123 must not hit a 2025.x fix).
-# Curated + conservative — extend only after checking a product's real version shape.
-_ROLLING_FULL  = ("edge_chromium",)
+# Curated + conservative — extend only after checking a product's real version shape. Do NOT add a
+# product that carries parallel lines under one CPE (office_2019 mixes Windows 16.0 + Mac 16.76;
+# remote_desktop ships 1.2/2.0/10.2 platform clients; powershell has parallel 7.x LTS channels) —
+# introduced="0" would cross-match those lines and false-positive.
+_ROLLING_FULL  = ("edge_chromium", "azure_data_studio", "azure_site_recovery")
 _ROLLING_MAJOR = ("visual_studio_code", "edge")
 
 
