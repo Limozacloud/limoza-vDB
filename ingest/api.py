@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,6 +36,19 @@ from ingest.match import (_sharepoint_product_line, cpe_qualifiers, load_curatio
 
 # Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
 _DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
+
+# INTERMEDIATE (remove with GH #66): glance bakes R2/SP into the Windows product name
+# (windows_server_2012_r2), but our affected rows key the host by the BASE product in source_data
+# (windows_server_2012 — the R2/SP distinction lives in the CPE update field). Fold the suffix off
+# the host's windows_product so Microsoft applicability matches. Verified: _r2/_sp never appears in
+# source_data.windows_product, so this only aligns the host, it never loses a real distinction.
+_WIN_R2_SP = re.compile(r"(.+?)_(r2|sp\d+)$")
+
+
+def _win_base_product(prod: str) -> str:
+    m = _WIN_R2_SP.match(prod or "")
+    return m.group(1) if m else prod
+
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
 
@@ -137,7 +151,7 @@ def _bulk_match(components: list, host=None) -> list:
                 q = cpe_qualifiers(cpe)
                 if cpe_prod.startswith("windows_"):
                     # An OS component: its own product + edition / installation type / Azure / arch.
-                    host["windows_product"] = cpe_prod
+                    host["windows_product"] = _win_base_product(cpe_prod)   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_edition_id"] = q["sw_edition"]
                     if q.get("target_sw"):
@@ -152,7 +166,7 @@ def _bulk_match(components: list, host=None) -> list:
                     # taken by the OS product — the host installation type (server/server_core/client)
                     # in sw_edition, so a Server-Core-only .NET fix is scoped correctly.
                     if q.get("target_sw", "").startswith("windows"):
-                        host["windows_product"] = q["target_sw"]
+                        host["windows_product"] = _win_base_product(q["target_sw"])   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_installation_type"] = q["sw_edition"]
                     if q.get("target_hw"):

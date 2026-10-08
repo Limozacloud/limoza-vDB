@@ -420,6 +420,24 @@ def parse_cpe(cpe):
     # `.net` CPE (glance's modern-runtime identity) lands on those rows instead of missing entirely.
     if p[3] == "microsoft" and prod in _MS_DOTNET_ALIASES:
         prod = ".net_framework"
+    # INTERMEDIATE (remove with GH #66): glance bakes R2/SP into the Windows product name
+    # (windows_server_2012_r2) instead of the NVD form our affected rows use (product
+    # windows_server_2012 + update field r2 / sp2). Fold the suffix into the update field so it
+    # resolves. 2008 R2 -> update r2, 2008 SP2 -> update sp2 (data-confirmed).
+    if p[3] == "microsoft" and prod.startswith("windows") and upd == "*":
+        m = re.match(r"(.+?)_(r2|sp\d+)$", prod)
+        if m:
+            prod, upd = m.group(1), m.group(2)
+    # INTERMEDIATE (remove with GH #66): glance hardcodes the kernel major.minor to `10.0` for every
+    # Windows, but pre-2016 kernels are 6.0/6.1/6.2/6.3; our fixes carry the real kernel, so `10.0`
+    # would sort the host above every fix. The build (3rd octet) identifies the kernel unambiguously
+    # — rewrite only the major.minor, keeping build+UBR, so `10.0.9600.x` becomes the canonical
+    # `6.3.9600.x`. A build we don't map (2016+/10/11) keeps `10.0`; an already-correct kernel is a
+    # no-op, so glance's future canonical form is untouched.
+    if ver and p[3] == "microsoft" and prod.startswith("windows"):
+        vp = ver.split(".")
+        if len(vp) >= 3 and vp[2] in _WIN_PRE10_BUILD and f"{vp[0]}.{vp[1]}" != _WIN_PRE10_BUILD[vp[2]]:
+            ver = ".".join(_WIN_PRE10_BUILD[vp[2]].split(".") + vp[2:])
     # key mirrors cpe_norm._key: cpe:2.3:part:vendor:product:*:update:*…  (13 fields)
     key = ":".join(["cpe", "2.3", p[2], p[3], prod, "*", upd] + ["*"] * 6)
     return key, ver
@@ -428,6 +446,16 @@ def parse_cpe(cpe):
 # Microsoft .NET product aliases that our extractor (via cpe_norm) folds into `.net_framework`; the
 # match path mirrors the same fold so a scanned `.net` CPE resolves to the stored rows.
 _MS_DOTNET_ALIASES = {".net", "dotnet_framework"}
+
+# INTERMEDIATE (remove with GH #66): pre-2016 Windows kernel major.minor keyed by the OS build
+# number (3rd version octet), to correct glance's hardcoded `10.0` prefix. 2016+/10/11 builds are
+# deliberately absent (they really are 10.0 and need no rewrite).
+_WIN_PRE10_BUILD = {
+    "6000": "6.0", "6001": "6.0", "6002": "6.0", "6003": "6.0",   # Server 2008 / Vista
+    "7600": "6.1", "7601": "6.1",                                  # Server 2008 R2 / 7
+    "9200": "6.2",                                                 # Server 2012 / 8
+    "9600": "6.3",                                                 # Server 2012 R2 / 8.1
+}
 
 
 def cpe_qualifiers(cpe):
