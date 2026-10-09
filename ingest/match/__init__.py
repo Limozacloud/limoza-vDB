@@ -476,6 +476,75 @@ def cpe_qualifiers(cpe):
     return {k: v for k, v in fields.items() if v not in ("*", "-", "")}
 
 
+# MSRC files one CPE for every platform a product ships on (".NET 10.0 installed on Mac OS",
+# "Microsoft Excel for Android", "Outlook for iOS"): the CPE carries no platform, only the MSRC
+# product name does. A scanned component's platform comes from its CPE target_sw; a Microsoft CPE
+# without one is a Windows inventory (every glance Microsoft classifier is a Windows cataloger).
+# "Windows" in the name wins, so "Windows Subsystem for Linux" stays a Windows product.
+_MS_ROW_PLATFORMS = (
+    ("android", re.compile(r"\bandroid\b")),
+    ("ios", re.compile(r"\bios\b|\biphone\b|\bipad\b")),
+    ("macos", re.compile(r"\bmac\b|\bmacos\b|\bmac os\b|\bos x\b")),
+    ("linux", re.compile(r"\blinux\b")),
+)
+_CPE_PLATFORMS = {"linux": "linux", "macos": "macos", "mac_os": "macos", "mac_os_x": "macos",
+                  "android": "android", "iphone_os": "ios", "ios": "ios"}
+
+
+def _ms_row_platform(product_name):
+    """Platform an MSRC product row applies to, from its product name ('windows' by default)."""
+    name = str(product_name or "").lower()
+    if re.search(r"\bwindows\b", name):
+        return "windows"
+    for platform, pattern in _MS_ROW_PLATFORMS:
+        if pattern.search(name):
+            return platform
+    return "windows"
+
+
+def _cpe_platform(cpe):
+    """Platform of a scanned CPE from its target_sw ('windows' when absent or a windows_* token)."""
+    return _CPE_PLATFORMS.get(cpe_qualifiers(cpe).get("target_sw", ""), "windows")
+
+
+# Desktop Office (suite and single apps). MSRC files several DISTINCT products under the same Office
+# CPEs: their fixes must never apply to an installed desktop Office.
+_OFFICE_PRODUCT = re.compile(
+    r"office(_\d{4}|_long_term_servicing_channel)?|excel|word|outlook|powerpoint|visio"
+    r"|project(_\d{4})?|access|publisher|onenote")
+_FOREIGN_OFFICE_PRODUCT = re.compile(r"online server|web apps server|deployment tool|for universal")
+
+
+def _office_train(build):
+    """Servicing train of a Windows Office 16.0 build, by its third octet (verified against the
+    affected data): 2016 MSI 4xxx-5xxx, 2019 10xxx-13xxx, LTSC 2021 14xxx-16xxx, later 17xxx+.
+    Builds of different trains are not comparable: a 2016 MSI host (16.0.5478) is not vulnerable to
+    a fix shipped as the LTSC 2021 build 16.0.14931. None for anything that is not a 16.0 build."""
+    m = re.match(r"\s*16\.0\.(\d+)", build or "")
+    if not m:
+        return None
+    third = int(m.group(1))
+    if third < 10000:
+        return "2016"
+    if third < 14000:
+        return "2019"
+    if third < 17000:
+        return "2021"
+    return "2024+"
+
+
+def _update_spelling_variant(key):
+    """NVD writes the CPE update field as `update_231`; part of the stored rows carry the same
+    update as `update231`. Return the key with the other spelling so a lookup sees both, or None."""
+    p = key.split(":")
+    if len(p) > 6:
+        m = re.fullmatch(r"update(_?)(\d+)", p[6])
+        if m:
+            other = f"update{m.group(2)}" if m.group(1) else f"update_{m.group(2)}"
+            return ":".join(p[:6] + [other] + p[7:])
+    return None
+
+
 def _microsoft_applicability(source_data, host=None, component_metadata=None):
     """Return applicability evidence for one MSRC product row."""
     if not isinstance(source_data, dict):
@@ -483,6 +552,12 @@ def _microsoft_applicability(source_data, host=None, component_metadata=None):
     host = host if isinstance(host, dict) else {}
     component_metadata = component_metadata if isinstance(component_metadata, dict) else {}
     unresolved = []
+
+    product_name = source_data.get("msrc_product_name")
+    if product_name:
+        host_platform = component_metadata.get("platform") or "windows"
+        if _ms_row_platform(product_name) != host_platform:
+            return {"state": "incompatible", "source_data": source_data}
 
     required_windows = source_data.get("windows_product")
     # A component can carry its OWN host-OS context (CPE target_sw, e.g. a .NET runtime stamped with
@@ -815,6 +890,10 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     if pkg.startswith("windows_"):
         version = _win_kernel_rewrite(version)   # INTERMEDIATE (GH #66): fix glance's 10.0 kernel major
     host = dict(host) if isinstance(host, dict) else {}
+    component_metadata = dict(component_metadata) if isinstance(component_metadata, dict) else {}
+    component_metadata.setdefault("platform", _cpe_platform(cpe))
+    is_office = bool(_OFFICE_PRODUCT.fullmatch(pkg))
+    office_train = _office_train(version) if is_office else None
     if pkg.startswith("windows_") and not host.get("windows_product"):
         host["windows_product"] = pkg
     if pkg == 'sharepoint_server':
@@ -839,7 +918,9 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
         fam_keys = [":".join(p[:4] + [prod] + p[5:]) for prod in _ms_family_products(fam, host_major)]
         sql, params = cols + "AND cpe23 = ANY(%s)", (fam_keys,)
     else:
-        sql, params = cols + "AND cpe23 = %s", (key,)
+        variant = _update_spelling_variant(key)
+        keys = [key, variant] if variant else [key]
+        sql, params = cols + "AND cpe23 = ANY(%s)", (keys,)
     by_cve = {}
     with conn.cursor() as cur:
         cur.execute(sql, params)
@@ -854,6 +935,13 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
                 fixed_sharepoint_edition = _sharepoint_edition(fixed)
                 if fixed_sharepoint_edition and fixed_sharepoint_edition != host_sharepoint_edition:
                     continue                           # foreign SharePoint edition (2016 / 2019 / SE)
+            if is_office:
+                name = str((source_data or {}).get("msrc_product_name") or "").lower()
+                if _FOREIGN_OFFICE_PRODUCT.search(name):
+                    continue                           # Online Server / Deployment Tool / UWP app
+                row_train = _office_train(fixed)
+                if office_train and row_train and row_train != office_train:
+                    continue                           # other Office servicing train (MSI vs C2R)
             applicability = _microsoft_applicability(
                 source_data, host=host, component_metadata=component_metadata,
             )
