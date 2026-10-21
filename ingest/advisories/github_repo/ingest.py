@@ -28,7 +28,7 @@ def run(conn, dirs: dict) -> int:
 
     delete_scope(conn, ORIGIN, SOURCE)
 
-    cpe_by_repo = {c["repo"]: c.get("cpe") for c in load_config()}
+    conf_by_repo = {c["repo"]: c for c in load_config()}
     seen_cvss, seen_cwe, seen_desc, seen_ref = set(), set(), set(), set()
     cve_pkgs = {}
     b = new_bundle()
@@ -40,10 +40,14 @@ def run(conn, dirs: dict) -> int:
                 advs = json.loads(f.read_bytes())
             except Exception:
                 continue
+            conf = conf_by_repo.get(repo) or {}
             for raw in advs:
-                a = transform(raw, repo, cpe_by_repo.get(repo))
+                a = transform(raw, repo, conf.get("cpe"))
                 if not a:
                     continue
+                if conf.get("branch_floors"):
+                    for p in a["packages"]:
+                        p["branch_floors"] = True
                 cid = a["cve"]
                 b["advisory"].append((SOURCE, a["id"], a["url"], a["title"],
                                       a["severity"], a["published"], a["modified"]))
