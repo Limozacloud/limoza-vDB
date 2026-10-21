@@ -50,6 +50,7 @@ def test_each_fix_branch_gets_its_own_lower_bound():
     assert {(r["introduced"], r["fixed"]) for r in rows} == {
         ("8.2", "8.2.35"), ("8.3", "8.3.36"), ("8.4", "8.4.27"), ("8.5", "8.5.12")}
     assert {r["cpe23"] for r in rows} == {"cpe:2.3:a:php:php:*:*:*:*:*:*:*:*"}
+    assert {r["package"] for r in rows} == {"php"}           # product, as every other cpe source
 
 
 def test_vulnerable_host_on_every_branch_is_flagged():

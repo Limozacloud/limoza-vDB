@@ -112,7 +112,7 @@ def extract(conn, dirs):
                 )
                 if cpe_key:                                   # cpe coord (real scanner CPEs)
                     yield row(
-                        cve_id=cid, coord="cpe", cpe23=cpe_key,
+                        cve_id=cid, coord="cpe", cpe23=cpe_key, package=cpe_key.split(":")[4],
                         introduced=intro or "0", fixed=fixed, last_affected=last,
                         version_scheme="generic",
                         status=st.FIXED if fixed else st.AFFECTED,
