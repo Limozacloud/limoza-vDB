@@ -10,6 +10,11 @@ from __future__ import annotations
 import re
 
 _LOG4J_JAR = re.compile(r"^log4j-(\d+(?:\.\d+)+)\.jar$", re.I)
+# @next/env is the Next.js monorepo's environment-variable loader. It is released in lockstep with
+# the `next` package (identical version) and carries no advisories of its own, so a Next.js CVE
+# (filed against `next`) is missed when an inventory reports only @next/env. Map it to `next`.
+# Group 1 captures the version straight from the purl when the component has no separate version.
+_NEXT_ENV = re.compile(r"(?i)^pkg:npm/@next/env(?:@([^?]+))?(?:\?|$)")
 
 
 def _purl_base(value: str) -> str:
@@ -42,13 +47,24 @@ def _names(component: dict) -> set[str]:
 def temporary_cpe_alias(component: dict, version: str) -> tuple[str, str] | None:
     """Map a verified legacy inventory identity to its canonical CPE.
 
-    Returns ``(cpe, reason)`` or ``None``. The caller must still ask the regular matcher
-    whether vDB has an applicable affected-version row for that CPE.
+    Returns ``(identity, reason)`` or ``None`` — the identity is a canonical CPE, or a purl when
+    aliasing to another package in the same ecosystem. The caller must still ask the regular
+    matcher whether vDB has an applicable affected-version row for that identity.
     """
     version = (version or "").strip()
+    raw_purl = str(component.get("purl") or "")
+
+    # @next/env → next (same version). Checked before the version guard so the version can come
+    # from the purl itself when the component carries no separate version field.
+    next_env = _NEXT_ENV.match(raw_purl)
+    if next_env:
+        next_version = version or (next_env.group(1) or "").strip()
+        if next_version:
+            return f"pkg:npm/next@{next_version}", "legacy_next_env"
+
     if not version:
         return None
-    purl = _purl_base(str(component.get("purl") or ""))
+    purl = _purl_base(raw_purl)
     names = _names(component)
 
     if purl == "pkg:maven/log4j/log4j":
