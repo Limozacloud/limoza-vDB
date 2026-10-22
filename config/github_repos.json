@@ -1,6 +1,7 @@
 {
-  "_comment": "Repos whose per-repository GitHub Security Advisories we ingest (github_repo source). For non-ecosystem software (desktop apps, firmware, standalone binaries) whose advisories never reach the global GHSA feed. Package software does NOT belong here — it comes in via the `ghsa` source. Each entry is either \"owner/repo\" or {\"repo\": \"owner/repo\", \"cpe\": \"cpe:2.3:a:vendor:product\"}. The optional CPE (canonical CPE 2.3, special chars escaped) lets a scanner that reports the app by CPE actually match.",
+  "_comment": "Repos whose per-repository GitHub Security Advisories we ingest (github_repo source). For non-ecosystem software (desktop apps, firmware, standalone binaries) whose advisories never reach the global GHSA feed. Package software does NOT belong here — it comes in via the `ghsa` source. Each entry is either \"owner/repo\" or {\"repo\": \"owner/repo\", \"cpe\": \"cpe:2.3:a:vendor:product\"}. The optional CPE (canonical CPE 2.3, special chars escaped) lets a scanner that reports the app by CPE actually match. \"branch_floors\": true = the project versions each fix per release branch (php-src), so every open-ended '<fix' range starts at its own major.minor.",
   "repos": [
-    { "repo": "notepad-plus-plus/notepad-plus-plus", "cpe": "cpe:2.3:a:notepad-plus-plus:notepad\\+\\+" }
+    { "repo": "notepad-plus-plus/notepad-plus-plus", "cpe": "cpe:2.3:a:notepad-plus-plus:notepad\\+\\+" },
+    { "repo": "php/php-src", "cpe": "cpe:2.3:a:php:php", "branch_floors": true }
   ]
 }
