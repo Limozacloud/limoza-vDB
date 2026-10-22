@@ -280,3 +280,91 @@ def test_match_cpe_selects_standard_server_and_dotnet_48_fixes():
 
     assert os_findings["CVE-2026-0001"][0][3] == "KB5120242"
     assert dotnet_findings["CVE-2026-62886"][0][3] == "KB5120705"
+
+
+def _row(cve, fixed, name, product="excel", introduced="16.0", **extra):
+    return (cve, "microsoft", introduced, fixed, None, "generic", "fixed", None, product,
+            {"msrc_product_name": name, **extra})
+
+
+def test_foreign_platform_rows_never_apply_to_a_windows_host():
+    rows = [
+        _row("CVE-2026-45649", "16.0.20131.20024", "Microsoft Excel for Android"),
+        _row("CVE-2024-49069", "16.0.5478.1002", "Microsoft Excel 2016 (64-bit edition)"),
+    ]
+    findings = match_cpe(_RowsConnection(rows), "cpe:2.3:a:microsoft:excel:*:*:*:*:*:*:*:*",
+                         "16.0.5404.1000", curations={})
+    assert "CVE-2026-45649" not in findings          # Android-only CVE on a Windows Excel
+    assert "CVE-2024-49069" in findings              # its own Windows fix still applies
+
+
+def test_windows_subsystem_for_linux_is_a_windows_product():
+    evidence = _microsoft_applicability({"msrc_product_name": "Windows Subsystem for Linux (WSL2)"})
+    assert evidence["state"] == "applicable"
+
+
+def test_dotnet_platform_follows_the_component_target_sw():
+    rows = [
+        _row("CVE-2026-32178", "10.0.6", ".NET 10.0 installed on Mac OS", product=".net_framework",
+             introduced="10.0"),
+        _row("CVE-2026-26171", "10.0.6", ".NET 10.0 installed on Linux", product=".net_framework",
+             introduced="10.0"),
+    ]
+    on_windows = match_cpe(
+        _RowsConnection(rows),
+        "cpe:2.3:a:microsoft:.net_framework:*:*:*:*:server:windows_server_2022:x64:10.0.0",
+        "10.0.0", curations={})
+    on_linux = match_cpe(
+        _RowsConnection(rows), "cpe:2.3:a:microsoft:.net_framework:*:*:*:*:*:linux:*:*",
+        "10.0.0", curations={})
+    assert on_windows == {}
+    assert set(on_linux) == {"CVE-2026-26171"}
+
+
+def test_office_msi_host_is_not_compared_against_another_servicing_train():
+    rows = [
+        _row("CVE-2022-33631", "16.0.14931.20612", "Microsoft Excel 2016 (32-bit edition)"),
+        _row("CVE-2024-49059", "16.0.5478.1004", "Microsoft Excel 2016 (32-bit edition)"),
+    ]
+    findings = match_cpe(_RowsConnection(rows), "cpe:2.3:a:microsoft:excel:*:*:*:*:*:*:*:*",
+                         "16.0.5478.1002", curations={})
+    assert "CVE-2022-33631" not in findings          # LTSC 2021 build, not the MSI line
+    assert "CVE-2024-49059" in findings              # MSI fix 5478.1004 > installed 5478.1002
+
+
+def test_distinct_office_products_do_not_leak_into_desktop_office():
+    rows = [
+        _row("CVE-2024-30042", "16.0.10410.20003", "Office Online Server", product="office"),
+        _row("CVE-2023-21823", "16.0.14326.21330", "Microsoft Office for Universal", product="office"),
+        _row("CVE-2026-20943", "16.0.19426.20170", "Microsoft Office Deployment Tool", product="office"),
+    ]
+    for build in ("16.0.5404.1000", "16.0.10417.20000", "16.0.14300.20000"):
+        findings = match_cpe(_RowsConnection(rows), "cpe:2.3:a:microsoft:office:*:*:*:*:*:*:*:*",
+                             build, curations={})
+        assert findings == {}, build
+
+
+class _RecordingCursor(_RowsCursor):
+    def __init__(self, rows, seen):
+        super().__init__(rows)
+        self.seen = seen
+
+    def execute(self, _sql, params):
+        self.seen.append(params)
+
+
+class _RecordingConnection(_RowsConnection):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.seen = []
+
+    def cursor(self):
+        return _RecordingCursor(self.rows, self.seen)
+
+
+def test_update_field_is_looked_up_in_both_spellings():
+    conn = _RecordingConnection([])
+    match_cpe(conn, "cpe:2.3:a:oracle:jre:1.8.0:update_231:*:*:*:*:*:*", "1.8.0", curations={})
+    keys = conn.seen[0][0]
+    assert "cpe:2.3:a:oracle:jre:*:update_231:*:*:*:*:*:*" in keys
+    assert "cpe:2.3:a:oracle:jre:*:update231:*:*:*:*:*:*" in keys
