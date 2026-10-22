@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.5.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.4.0...v0.5.0) (2026-10-22)
+
+
+### Features
+
+* alias npm @next/env to next so Next.js advisories apply ([#64](https://github.com/Limozacloud/limoza-vDB/issues/64)) ([0dbfc22](https://github.com/Limozacloud/limoza-vDB/commit/0dbfc225f188eb61b161c2b19616fc66c67c4fa8))
+* central MATCH_RHEL_ASSUME_LATEST_MINOR switch for latest-minor RHEL remediation ([#63](https://github.com/Limozacloud/limoza-vDB/issues/63)) ([1b356ce](https://github.com/Limozacloud/limoza-vDB/commit/1b356cef499b8d4a577b6bd593cd301d16320a74))
+* github_repo source — per-repo GitHub security advisories for non-ecosystem software ([#28](https://github.com/Limozacloud/limoza-vDB/issues/28)) ([b2f1b7d](https://github.com/Limozacloud/limoza-vDB/commit/b2f1b7d2a9d580300b3ca0c8dde5bc5ea25216b2))
+* ingest php-src repository advisories with per-branch fix ranges ([#69](https://github.com/Limozacloud/limoza-vDB/issues/69)) ([e5ad573](https://github.com/Limozacloud/limoza-vDB/commit/e5ad573fbca233ed3450f393912d67913f8ac47d))
+* source Microsoft applicability context from CPE fields, not the metadata side-channel ([#59](https://github.com/Limozacloud/limoza-vDB/issues/59)) ([b62d2f7](https://github.com/Limozacloud/limoza-vDB/commit/b62d2f7feef43429390797f7e4802bf9bd2484ea))
+
+
+### Bug Fixes
+
+* align Microsoft and GHSA remediation matching with Tenable ([#56](https://github.com/Limozacloud/limoza-vDB/issues/56)) ([e3d28b3](https://github.com/Limozacloud/limoza-vDB/commit/e3d28b315fcf2bd2db7e077812f5c4c72dbefcb9))
+* backfill empty Edge FixedBuild so all Edge (Chromium) CVEs match ([#29](https://github.com/Limozacloud/limoza-vDB/issues/29)) ([86986c9](https://github.com/Limozacloud/limoza-vDB/commit/86986c93cf4551ba18a6567bed1dd97730ccb450))
+* intermediate tolerance for glance's Windows R2/SP product name + 10.0 kernel ([#67](https://github.com/Limozacloud/limoza-vDB/issues/67)) ([ab1216c](https://github.com/Limozacloud/limoza-vDB/commit/ab1216cfb77342ac634185ff53c9e46c7bf8fb8d))
+* match Microsoft SQL Server CPE across its edition products ([#44](https://github.com/Limozacloud/limoza-vDB/issues/44)) ([#46](https://github.com/Limozacloud/limoza-vDB/issues/46)) ([9306c1a](https://github.com/Limozacloud/limoza-vDB/commit/9306c1ace1dd74625e1f9230607d8110dd5b4f40))
+* matcher looks up the binary package first, source only as fallback ([#38](https://github.com/Limozacloud/limoza-vDB/issues/38)) ([9dcbc34](https://github.com/Limozacloud/limoza-vDB/commit/9dcbc34e4d54d07494f982eb8820c8c2430ed48a))
+* Microsoft CPE family match uses exact keys (index scan, not a 14M-row seq scan) ([#48](https://github.com/Limozacloud/limoza-vDB/issues/48)) ([e9bc072](https://github.com/Limozacloud/limoza-vDB/commit/e9bc0722276f36bcfdb8fe82516d6867963cc0d5))
+* only emit affected rows for base-RHEL platforms, skip layered products ([#40](https://github.com/Limozacloud/limoza-vDB/issues/40)) ([85d1171](https://github.com/Limozacloud/limoza-vDB/commit/85d1171c740d11726189eea2810c1368d66b70f1))
+* rebuild each affected origin with an atomic swap so /match stays consistent ([#33](https://github.com/Limozacloud/limoza-vDB/issues/33)) ([6db3882](https://github.com/Limozacloud/limoza-vDB/commit/6db388262dfd282f98df3f7fc6669efb13b2969a))
+* redhat _resolve returns a 5-tuple in the base-platform guard (daily crash) ([#47](https://github.com/Limozacloud/limoza-vDB/issues/47)) ([a28dd6f](https://github.com/Limozacloud/limoza-vDB/commit/a28dd6f8b628766a5333368ce7e94b884d566af1))
+* rpm matcher — binary+source lookup and bare .elN stream expansion ([#31](https://github.com/Limozacloud/limoza-vDB/issues/31)) ([e0a370f](https://github.com/Limozacloud/limoza-vDB/commit/e0a370fe3e2a7d32071d785336d368fe96748e08))
+* rpm matcher — scope to the host's own line (fips/ksplice variant + EUS minor) ([#32](https://github.com/Limozacloud/limoza-vDB/issues/32)) ([6d95743](https://github.com/Limozacloud/limoza-vDB/commit/6d957434cc5052acf7586dc287b0b6dda64509af))
+* scope a kernel host to its own version line (kernel-alt cross-line FP) ([#53](https://github.com/Limozacloud/limoza-vDB/issues/53)) ([a2e567b](https://github.com/Limozacloud/limoza-vDB/commit/a2e567b334cad1b7043fdc3a4bf5b9b70ea00ba1))
+* scope AppStream module fixes to the host's stream (module_stream) ([#43](https://github.com/Limozacloud/limoza-vDB/issues/43)) ([e6f8c06](https://github.com/Limozacloud/limoza-vDB/commit/e6f8c0612e96b7414cf4fbb99eee8d1795a8f5a8))
+* scope Microsoft remediation by applicability ([#58](https://github.com/Limozacloud/limoza-vDB/issues/58)) ([1d1670b](https://github.com/Limozacloud/limoza-vDB/commit/1d1670bf794d96bdd89ac418c6cbc856cd27f825))
+* scope Microsoft rows by platform, Office train and update spelling ([#70](https://github.com/Limozacloud/limoza-vDB/issues/70)) ([27676e2](https://github.com/Limozacloud/limoza-vDB/commit/27676e2f289c488c28f4b9197fb26dbea589bdce))
+* scope SharePoint vulnerability matching by edition ([#51](https://github.com/Limozacloud/limoza-vDB/issues/51)) ([070965e](https://github.com/Limozacloud/limoza-vDB/commit/070965ee64347af9fd5cac2dc6c71204cb11a7db))
+* scope SUSE/SLE hosts to their own codestream + product family ([#22](https://github.com/Limozacloud/limoza-vDB/issues/22), [#23](https://github.com/Limozacloud/limoza-vDB/issues/23)) ([#45](https://github.com/Limozacloud/limoza-vDB/issues/45)) ([44ba6b4](https://github.com/Limozacloud/limoza-vDB/commit/44ba6b451c1ae955e63cf1596374984ecc3d471b))
+* suppress AppStream module co-rebuild false positives (parallel-line guard + VEX) ([#39](https://github.com/Limozacloud/limoza-vDB/issues/39)) ([c6cfa51](https://github.com/Limozacloud/limoza-vDB/commit/c6cfa513f6c882581436de9ca7ec55b9928727a0))
+* track-aware SQL Server servicing-line matching across all releases ([#62](https://github.com/Limozacloud/limoza-vDB/issues/62)) ([1a0393e](https://github.com/Limozacloud/limoza-vDB/commit/1a0393e010acf7ebb06516c9134164b5571b00f9))
+* treat azure_data_studio and azure_site_recovery as single-line rolling products ([#65](https://github.com/Limozacloud/limoza-vDB/issues/65)) ([e1b9985](https://github.com/Limozacloud/limoza-vDB/commit/e1b9985fe30b34a0664368de8ec4e92db2a4778f))
+
 ## [0.4.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.3.0...v0.4.0) (2026-07-18)
 
 
