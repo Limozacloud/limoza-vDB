@@ -364,7 +364,14 @@ class _RecordingConnection(_RowsConnection):
 
 def test_update_field_is_looked_up_in_both_spellings():
     conn = _RecordingConnection([])
-    match_cpe(conn, "cpe:2.3:a:oracle:jre:1.8.0:update_231:*:*:*:*:*:*", "1.8.0", curations={})
+    match_cpe(conn, "cpe:2.3:a:ibm:java:1.8.0:update_231:*:*:*:*:*:*", "1.8.0", curations={})
     keys = conn.seen[0][0]
-    assert "cpe:2.3:a:oracle:jre:*:update_231:*:*:*:*:*:*" in keys
-    assert "cpe:2.3:a:oracle:jre:*:update231:*:*:*:*:*:*" in keys
+    assert "cpe:2.3:a:ibm:java:*:update_231:*:*:*:*:*:*" in keys
+    assert "cpe:2.3:a:ibm:java:*:update231:*:*:*:*:*:*" in keys
+
+
+def test_oracle_java_reads_every_row_of_the_product():
+    # "and earlier" needs all update keys of the product, not the host's exact key (test_oracle_java)
+    conn = _RecordingConnection([])
+    match_cpe(conn, "cpe:2.3:a:oracle:jre:1.8.0:update_231:*:*:*:*:*:*", "1.8.0", curations={})
+    assert conn.seen[0][0] == ["jre", "java_se"]
