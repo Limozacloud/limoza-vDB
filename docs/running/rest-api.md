@@ -50,7 +50,11 @@ Reviewed compatibility aliases may map specific legacy identities to their canon
 the primary match finds nothing. `component` is the identity the matcher **resolved** (a purl or
 a cpe — a generic purl loses to a real ecosystem purl or a cpe). `status` is `vulnerable` |
 `compliant` | `unknown` (the
-component couldn't be parsed/compared). For an applicable Microsoft CPE finding, `fix_kb`
+component couldn't be parsed/compared). An rpm purl with a `vendor` qualifier is a third-party
+build (Remi, EPEL, MySQL community, PGDG, …; glance adds the qualifier only to those). Distro
+advisories never describe such a build, so it is not matched against them and comes back
+`unknown` with `"reason": "third_party_build"`. Its upstream identity (e.g.
+`cpe:2.3:a:php:php:8.4.24`) arrives as a separate component and is matched normally. For an applicable Microsoft CPE finding, `fix_kb`
 carries the source MSRC article. This is not necessarily the package Windows Update
 offers: cumulative and umbrella updates can use another KB. When product/platform/channel context
 is incomplete, `selection` is `ambiguous`, `fix_kb` is null, and `candidates` retains

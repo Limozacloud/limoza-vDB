@@ -981,9 +981,23 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
             ))}
 
 
+def is_third_party_build(purl):
+    """An rpm built by someone other than the host's distribution (Remi, EPEL, MySQL community,
+    PGDG, …). glance adds a `vendor` qualifier to exactly those purls; distro packages carry none.
+    Distro advisories (Red Hat / Oracle / SUSE OVAL & CSAF) describe the distro's own builds and
+    backports only — applied to a third-party build they compare a foreign version line against
+    the distro's fixes (Remi php-cli 8.4.24 got Red Hat's 'affected' for CVE-2024-2408, fixed
+    upstream in 8.3.8). glance reports such a build's upstream identity as its own component."""
+    if not purl.startswith("pkg:rpm/") or "?" not in purl:
+        return False
+    return bool(unquote(parse_purl(purl)[3].get("vendor", "")).strip())
+
+
 def match(conn, purl, version=None, release=None, curations=None, servicing_track=None,
           host=None, component_metadata=None):
     """Return {cve_id: [(source, status, fixed, fix_kb, scheme), …]} for the vulnerable hits."""
+    if is_third_party_build(purl):
+        return {}                                   # no distro rules for a third-party build
     if curations is None:
         curations = load_curations(conn)
     if purl.startswith("cpe:"):
