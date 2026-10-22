@@ -179,6 +179,23 @@ top-level remediation until vDB has a verified build-to-track classifier. Their 
 verdict retains the historical parallel-fix behavior rather than applying unverified GDR/CU
 classification rules.
 
+#### RHEL minor scoping — `MATCH_RHEL_ASSUME_LATEST_MINOR`
+
+A RHEL-family host (redhat/oracle/alma/rocky/centos) is by default scoped to the minor line(s)
+it reports — its own package dist tag plus the OS minor from `distro=` (for example a host on
+`iwl100-firmware-…-69.el7` with `distro=redhat-7.6` is matched against `el7` + `el7_6`). This is
+correct for an **EUS-pinned** host, which cannot move off its minor, but it caps the remediation
+at that minor's line and so omits a later z-stream fix on a higher minor (e.g. `-84.el7_9`).
+
+Set the environment variable `MATCH_RHEL_ASSUME_LATEST_MINOR=true` (on the service that runs the
+matcher — `api` for `/match`) to instead match every minor line of the host's major
+(`elN` + all `elN_M`). This treats the host as a normal, non-EUS system that `yum update` floats
+to the latest minor, so it is offered the **latest** z-stream fix — matching how vendor scanners
+(e.g. Tenable) report. It is a **fleet-wide** switch: with it on, a genuinely EUS-pinned host is
+offered a higher-minor build it cannot install, so enable it only when the fleet is not EUS-pinned.
+The switch is RHEL-family only — SUSE service-pack codestreams and Debian/Ubuntu releases (which do
+not float to a newer line) are never affected. Default off preserves the strict per-minor scoping.
+
 ### `POST /lve` — role `lve_writer`
 Create a custom vulnerability entry ([LVE](../affected-versions.md#lve-custom-entries)).
 A read-only token gets `403`.

@@ -20,6 +20,9 @@ services:
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # per-repo GitHub security-advisory ingest (source github_repo). 5000 req/h vs 60/h unauth.
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # RHEL-family only: match against every minor line of the major (latest z-stream fix) instead
+      # of only the reported minor. Fleet-wide; non-EUS fleets only. Default off. See rest-api.md.
+      MATCH_RHEL_ASSUME_LATEST_MINOR: ${MATCH_RHEL_ASSUME_LATEST_MINOR:-false}
     volumes:
       - epss:/data/epss
       - kev:/data/kev
@@ -99,6 +102,9 @@ services:
       POSTGRES_DSN:      postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       HASURA_JWT_SECRET: ${HASURA_JWT_SECRET}
       API_PORT:          "8770"
+      # RHEL-family only: offer the latest-minor z-stream fix (vendor-scanner parity) instead of
+      # capping at the host's reported minor. Fleet-wide; non-EUS fleets only. Default off.
+      MATCH_RHEL_ASSUME_LATEST_MINOR: ${MATCH_RHEL_ASSUME_LATEST_MINOR:-false}
     command: api
     depends_on:
       - postgres
