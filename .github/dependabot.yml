@@ -9,6 +9,11 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # mcp 2.x renamed FastMCP → MCPServer and changed its APIs; mcp-server/server.py is v1
+      # code. Migrate deliberately in its own PR, then drop this ignore.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
       - "python"
