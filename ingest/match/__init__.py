@@ -420,6 +420,14 @@ def parse_cpe(cpe):
     # `.net` CPE (glance's modern-runtime identity) lands on those rows instead of missing entirely.
     if p[3] == "microsoft" and prod in _MS_DOTNET_ALIASES:
         prod = ".net_framework"
+    # INTERMEDIATE (remove with GH #66): glance bakes R2/SP into the Windows product name
+    # (windows_server_2012_r2) instead of the NVD form our affected rows use (product
+    # windows_server_2012 + update field r2 / sp2). Fold the suffix into the update field so it
+    # resolves. 2008 R2 -> update r2, 2008 SP2 -> update sp2 (data-confirmed).
+    if p[3] == "microsoft" and prod.startswith("windows") and upd == "*":
+        m = re.match(r"(.+?)_(r2|sp\d+)$", prod)
+        if m:
+            prod, upd = m.group(1), m.group(2)
     # key mirrors cpe_norm._key: cpe:2.3:part:vendor:product:*:update:*…  (13 fields)
     key = ":".join(["cpe", "2.3", p[2], p[3], prod, "*", upd] + ["*"] * 6)
     return key, ver
@@ -428,6 +436,29 @@ def parse_cpe(cpe):
 # Microsoft .NET product aliases that our extractor (via cpe_norm) folds into `.net_framework`; the
 # match path mirrors the same fold so a scanned `.net` CPE resolves to the stored rows.
 _MS_DOTNET_ALIASES = {".net", "dotnet_framework"}
+
+# INTERMEDIATE (remove with GH #66): pre-2016 Windows kernel major.minor keyed by the OS build
+# number (3rd version octet), to correct glance's hardcoded `10.0` prefix. 2016+/10/11 builds are
+# deliberately absent (they really are 10.0 and need no rewrite).
+_WIN_PRE10_BUILD = {
+    "6000": "6.0", "6001": "6.0", "6002": "6.0", "6003": "6.0",   # Server 2008 / Vista
+    "7600": "6.1", "7601": "6.1",                                  # Server 2008 R2 / 7
+    "9200": "6.2",                                                 # Server 2012 / 8
+    "9600": "6.3",                                                 # Server 2012 R2 / 8.1
+}
+
+
+def _win_kernel_rewrite(version):
+    """INTERMEDIATE (remove with GH #66): correct glance's hardcoded `10.0` kernel major.minor for a
+    pre-2016 Windows build. The build (3rd octet) identifies the kernel unambiguously, so rewrite
+    only the major.minor and keep build+UBR: `10.0.9600.22221` -> `6.3.9600.22221`. A build we do
+    not map (2016+/10/11) or an already-correct kernel is a no-op, so glance's future canonical form
+    passes through untouched. Applied to the version actually compared (match_cpe), not just the one
+    parsed from the CPE, because glance also sends an explicit `version` that would otherwise win."""
+    vp = (version or "").split(".")
+    if len(vp) >= 3 and vp[2] in _WIN_PRE10_BUILD and f"{vp[0]}.{vp[1]}" != _WIN_PRE10_BUILD[vp[2]]:
+        return ".".join(_WIN_PRE10_BUILD[vp[2]].split(".") + vp[2:])
+    return version
 
 
 def cpe_qualifiers(cpe):
@@ -781,6 +812,8 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
     pkg = key.split(":")[4]
+    if pkg.startswith("windows_"):
+        version = _win_kernel_rewrite(version)   # INTERMEDIATE (GH #66): fix glance's 10.0 kernel major
     host = dict(host) if isinstance(host, dict) else {}
     if pkg.startswith("windows_") and not host.get("windows_product"):
         host["windows_product"] = pkg
