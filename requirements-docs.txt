@@ -1,2 +1,2 @@
   mkdocs>=1.6.1,<2
-  pymdown-extensions>=12.0.1,<13
+  pymdown-extensions>=12.3,<13
