@@ -31,8 +31,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
 from ingest.core.db import get_conn
-from ingest.match import (_sharepoint_product_line, cpe_qualifiers, load_curations, match,
-                          parse_cpe, parse_purl, remediation)
+from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_party_build,
+                          load_curations, match, parse_cpe, parse_purl, remediation)
 
 # Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
 _DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
@@ -175,6 +175,12 @@ def _bulk_match(components: list, host=None) -> list:
                         metadata["dotnet_framework_product"] = q["other"]
             context_key = json.dumps({"host": host, "metadata": metadata}, sort_keys=True)
             k = (ident, cpe, alias[0] if alias else None, ver, rel, preferred_track, context_key)
+            if k not in cache and is_third_party_build(ident):
+                # Not assessable against distro advisories (see is_third_party_build) — report it as
+                # such instead of "compliant". glance sends the build's upstream identity (e.g.
+                # cpe:…:php:php:8.4.24, from the binary inside it) as a separate component.
+                cache[k] = {"status": "unknown", "cves": [], "reason": "third_party_build",
+                            "identity_source": "primary", "_matched_component": ident}
             if k not in cache:
                 try:
                     f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track,
