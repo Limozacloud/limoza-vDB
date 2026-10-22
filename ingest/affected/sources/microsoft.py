@@ -59,6 +59,14 @@ _ROLLING_FULL  = ("edge_chromium", "azure_data_studio", "azure_site_recovery")
 _ROLLING_MAJOR = ("visual_studio_code", "edge")
 
 
+# MSRC joins the per-component builds of one remediation in five ways (all seen in the CVRF data):
+# "2.0.50727.9068 & 3.0.30729.9065 & 4.8.4801.0", "… AND …", "4.8.9334.0 and 4.8.4802.0",
+# "3.0.6920.8954; 2.0.50727.8970", "9.0.319, 9.0.122". Only "&" used to be split, so every
+# .NET Framework remediation written with AND/and/; was dropped (no affected row at all) — e.g.
+# all "Microsoft .NET Framework 3.5 AND 4.8 on Windows Server 2019" fixes since 2026-Aug.
+_BUILD_LIST_SEP = re.compile(r"\s*(?:&|;|,|\band\b)\s*", re.IGNORECASE)
+
+
 def _norm_build(fb: str, product: str):
     """MSRC FixedBuild → a comparable build, or None when it isn't build-matchable.
 
@@ -68,8 +76,8 @@ def _norm_build(fb: str, product: str):
       compares against the scanner's full build (16.0.MMMM.PPPP).
     """
     fb = (fb or "").strip()
-    if "&" in fb:
-        builds = [part.strip() for part in fb.split("&") if part.strip()]
+    if _BUILD_LIST_SEP.search(fb):
+        builds = [part for part in _BUILD_LIST_SEP.split(fb) if part]
         if product in _DOTNET_PRODUCTS:
             builds = [build for build in builds if build.startswith("4.")]
         if len(builds) != 1:
