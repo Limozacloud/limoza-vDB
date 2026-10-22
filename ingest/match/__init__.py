@@ -896,6 +896,91 @@ def _sharepoint_product_line(build):
     return _sharepoint_edition(build) or f'{parts[0]}.{parts[1]}'
 
 
+# ── Oracle Java (JRE / JDK / OpenJDK) ────────────────────────────────────────────────────────
+# Oracle's Critical Patch Update advisories name the LATEST affected release of each supported line
+# ("Oracle Java SE: 8u251, 11.0.7, 14.0.1"), meaning that release AND EVERY EARLIER ONE of the same
+# line. NVD stores that as exact points (jre:*:update251 with version 1.8.0; jre 11.0.7), so an
+# exact-key lookup only ever hits a host on precisely the named release: 8u231 matched 9 of the 294
+# CVEs Tenable reports for it. For these products the rows are read per product and compared on one
+# scale: a Java 8 build becomes 1.8.0.<update> (8u231 → 1.8.0.231) and a point row becomes the range
+# "<line> … <named release>" (8u251 → 1.8.0.0–1.8.0.251, 11.0.7 → 11.0.0–11.0.7). Real ranges and
+# fixed rows keep their meaning on the same scale. Oracle's own CNA records (product java_se, value
+# "Oracle Java SE:8u401") are read too: they carry the newest CPUs before NVD has analysed them.
+_ORACLE_JAVA = {"jre", "jdk", "openjdk"}
+_JAVA_LEGACY = re.compile(r"1\.(\d+)\.0")
+# NVD spells the update field update231, update_231, update471_b50 and update402-b05 (build suffix);
+# milestoneN (pre-GA builds) is no update and falls back to GA
+_JAVA_UPDATE = re.compile(r"update_?(\d+)(?:[_-]b\d+)?")
+_JAVA_CNA = re.compile(r"Oracle Java SE:\s*(?:(\d+)u(\d+)|(\d+(?:\.\d+)+))$")
+
+
+def _java_scale(version, update=None):
+    """(line, comparable version) for a Java release, or None. Legacy 1.x.0 + update N → ('1.x',
+    '1.x.0.N'); a modern release (major ≥ 9) → (major, version)."""
+    v = (version or "").strip()
+    m = _JAVA_LEGACY.fullmatch(v)
+    if m:
+        return f"1.{m.group(1)}", f"{v}.{int(update)}" if update is not None else None
+    m = re.fullmatch(r"(\d+)(?:\.\d+)*", v)
+    if m and int(m.group(1)) >= 9:
+        return m.group(1), v
+    return None
+
+
+def _java_host(cpe, version):
+    """Host Java release from the CPE (glance: jre:1.8.0:update_231 / openjdk:11.0.24), falling
+    back to the raw build forms older inventories carry (8.0.2310.11 Windows DisplayVersion,
+    1.8.0_291-b09, 11.0.24+8). Returns (line, comparable version) or None (→ exact-key matching)."""
+    parts = (cpe.split(":") + [""] * 13)[:13]
+    upd = _JAVA_UPDATE.fullmatch(parts[6])
+    scaled = _java_scale(parts[5], upd.group(1) if upd else None)
+    if scaled and scaled[1]:
+        return scaled
+    for raw in (parts[5], version or ""):
+        raw = raw.strip()
+        m = re.fullmatch(r"(\d)\.0\.(\d+)0\.\d+", raw)                 # 8.0.2310.11 → 8u231
+        if m and int(m.group(1)) < 9:
+            return f"1.{m.group(1)}", f"1.{m.group(1)}.0.{int(m.group(2))}"
+        m = re.fullmatch(r"1\.(\d+)\.0_(\d+)(?:-b\d+)?", raw)          # 1.8.0_291-b09
+        if m:
+            return f"1.{m.group(1)}", f"1.{m.group(1)}.0.{int(m.group(2))}"
+        m = re.fullmatch(r"(\d+(?:\.\d+){1,3})(?:[+-].*)?", raw)       # 11.0.24+8-LTS
+        if m and int(m.group(1).split(".")[0]) >= 9:
+            return m.group(1).split(".")[0], m.group(1)
+    return None
+
+
+def _java_row(host_line, update_field, intro, fixed, last):
+    """Re-express one Oracle Java row on the host's comparable scale → (intro, fixed, last), or
+    None when the row is about another release line (or unreadable)."""
+    upd = _JAVA_UPDATE.fullmatch(update_field or "")
+    cna = _JAVA_CNA.fullmatch((last or intro or "").strip()) if (intro or "").startswith("Oracle") else None
+    if cna:                                       # Oracle CNA point: "Oracle Java SE:8u401" / ":11.0.22"
+        scaled = (_java_scale(f"1.{cna.group(1)}.0", cna.group(2)) if cna.group(1)
+                  else _java_scale(cna.group(3)))
+        if not scaled or scaled[0] != host_line:
+            return None
+        return f"{scaled[1].rsplit('.', 1)[0]}.0" if scaled[0].startswith("1.") else f"{scaled[0]}.0.0", None, scaled[1]
+    if intro and last and intro == last and not fixed:                 # NVD point → "… and earlier"
+        scaled = _java_scale(last, upd.group(1) if upd else None)
+        if not scaled or scaled[0] != host_line:
+            return None
+        if scaled[0].startswith("1."):
+            # no update field: NVD's early entries ("jre 1.8.0", 2014) name the GA release — the only
+            # 8 build then — not every later update, so they cover update 0 only
+            return f"{last}.0", None, scaled[1] if scaled[1] else f"{last}.0"
+        return f"{scaled[0]}.0.0", None, scaled[1]
+    # a real range / fix: same meaning, legacy bounds carry their update on the 1.x.0.N scale
+    def on_scale(v):
+        if not v or v == "0":
+            return v
+        sc = _java_scale(v, upd.group(1) if upd else None)
+        return sc[1] if sc and sc[1] else v
+    if host_line.startswith("1.") is False and upd:
+        return None                                   # a Java 8 update row says nothing about 11+
+    return on_scale(intro), on_scale(fixed), on_scale(last)
+
+
 def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
               host=None, component_metadata=None):
     """Match a CPE 2.3 string (from a binary/registry cataloger) against the cpe lane."""
@@ -906,6 +991,9 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     if not version:
         raise ValueError("no version (give cpe:…:<version>:… or a second arg)")
     pkg = key.split(":")[4]
+    java = _java_host(cpe, version) if key.split(":")[3] == "oracle" and pkg in _ORACLE_JAVA else None
+    if java:
+        version = java[1]                          # comparable Java scale (8u231 → 1.8.0.231)
     if pkg.startswith("windows_"):
         version = _win_kernel_rewrite(version)   # INTERMEDIATE (GH #66): fix glance's 10.0 kernel major
     host = dict(host) if isinstance(host, dict) else {}
@@ -932,7 +1020,14 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     host_sharepoint_edition = _sharepoint_edition(version) if pkg == 'sharepoint_server' else None
     cols = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
             "split_part(cpe23, ':', 5), source_data FROM affected WHERE coord = 'cpe' ")
-    if fam:                                            # exact sibling keys → index scan (not LIKE)
+    if java:
+        # every row of the product (+ Oracle's CNA java_se records) — "and earlier" needs all
+        # update keys, not the host's exact one. (ecosystem, package) index; ~8k rows per product.
+        sql = ("SELECT cve_id, source, introduced, fixed, last_affected, version_scheme, status, fix_kb, "
+               "split_part(cpe23, ':', 7), source_data FROM affected WHERE coord = 'cpe' "
+               "AND ecosystem IS NULL AND package = ANY(%s) AND cpe23 LIKE 'cpe:2.3:a:oracle:%%'")
+        params = ([pkg, "java_se"],)
+    elif fam:                                          # exact sibling keys → index scan (not LIKE)
         p = key.split(":")
         fam_keys = [":".join(p[:4] + [prod] + p[5:]) for prod in _ms_family_products(fam, host_major)]
         sql, params = cols + "AND cpe23 = ANY(%s)", (fam_keys,)
@@ -944,6 +1039,12 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     with conn.cursor() as cur:
         cur.execute(sql, params)
         for cid, src, intro, fixed, last, scheme, status, kb, product, source_data in cur.fetchall():
+            if java:
+                scaled = _java_row(java[0], product, intro, fixed, last)   # product = update field
+                if scaled is None:
+                    continue                           # another Java release line
+                intro, fixed, last = scaled
+                scheme = "generic"
             if fam:
                 if _ms_family(product) != fam:         # a real family sibling only (not …_studio)
                     continue
