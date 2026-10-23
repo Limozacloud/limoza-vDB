@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from ingest.advisories import advisory_url, delete_scope, flush, new_bundle, vendor_row
+from ingest.advisories.suse.sync import vex_files
 from ingest.advisories.suse.transform import parse, transform_vex, parse_advisory
 
 ORIGIN    = "suse"
@@ -101,7 +102,7 @@ def run(conn, dirs: dict) -> int:
     if not vex_dir.exists():
         print("  suse: vex/ not found — run `sync suse` first")
         return 0
-    files = sorted(vex_dir.rglob("cve-*.json"))
+    files = vex_files(vex_dir)
     print(f"  suse: {len(files):,} VEX files")
 
     dsn = os.environ["POSTGRES_DSN"]
