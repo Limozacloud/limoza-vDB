@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/Limozacloud/limoza-vDB/compare/v0.5.0...v0.5.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* do not match third-party rpm builds against distro advisories ([#73](https://github.com/Limozacloud/limoza-vDB/issues/73)) ([0bfe93c](https://github.com/Limozacloud/limoza-vDB/commit/0bfe93ca3a09eae59cae10693884233c900ac16f))
+* Oracle Java CPU rows mean "this release and every earlier one" ([#76](https://github.com/Limozacloud/limoza-vDB/issues/76)) ([a97c38f](https://github.com/Limozacloud/limoza-vDB/commit/a97c38f5576a267ba0ecf994e7d1ad5367cc1a85))
+* split MSRC FixedBuild lists on every separator MSRC uses ([#74](https://github.com/Limozacloud/limoza-vDB/issues/74)) ([6061791](https://github.com/Limozacloud/limoza-vDB/commit/6061791dfac6b525cb2de0218a8df76360048ac0))
+* **suse:** sync VEX files from SUSE's year sub-directories ([#77](https://github.com/Limozacloud/limoza-vDB/issues/77)) ([b3bb261](https://github.com/Limozacloud/limoza-vDB/commit/b3bb2614f0ea43df6b0725e1ec8ba35f232cb407))
+
 ## [0.5.0](https://github.com/Limozacloud/limoza-vDB/compare/v0.4.0...v0.5.0) (2026-10-22)
 
 
