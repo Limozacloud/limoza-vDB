@@ -9,11 +9,11 @@ Same CSAF shape as Red Hat but SUSE-specific details:
 
 Per file we de-duplicate to one row per (package, release, status, fixed).
 """
-import glob
 import json
 import re
 from pathlib import Path
 
+from ingest.advisories.suse.sync import vex_files
 from ingest.affected import row
 from ingest.affected import status as st
 from ingest.affected.sources.redhat import _index_tree    # same product_tree structure
@@ -100,11 +100,11 @@ def _file_rows(d: dict):
 
 def extract(conn, dirs):
     base = Path(dirs["suse"]) / "vex"
-    for f in glob.iglob(str(base / "**" / "cve-*.json"), recursive=True):
-        if not f.endswith(".json"):
-            continue
+    if not base.exists():
+        return
+    for f in vex_files(base):
         try:
-            d = json.loads(Path(f).read_bytes())
+            d = json.loads(f.read_bytes())
         except Exception:
             continue
         yield from _file_rows(d)

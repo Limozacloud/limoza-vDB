@@ -1,6 +1,7 @@
 """Sync SUSE CSAF feeds from ftp.suse.com.
 
-  csaf-vex/  (cve-*.json)    — per-CVE VEX, fetched as one tar.bz2 archive (~377 MB).
+  csaf-vex/  (<year>/cve-*.json) — per-CVE VEX, fetched as one tar.bz2 archive (~377 MB). SUSE moved the
+                              files into year sub-directories; copies synced before that stay flat in vex/.
   csaf/      (*-su-*.json)   — per-advisory; only security updates (-su-), listed in
                               index.txt, downloaded individually (no archive).
 
@@ -56,17 +57,29 @@ def _changed(base_url: str, since: str) -> list:
 
 
 def _fetch_many(base_url: str, dest: Path, names: list) -> int:
-    saved = 0
+    # names carry SUSE's year sub-directory (e.g. "2026/cve-2026-1234.json")
     def _one(fn):
         try:
-            (dest / fn).write_bytes(_get(f"{base_url}/{fn}"))
-            return 1
-        except Exception:
-            return 0
+            out = dest / fn
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(_get(f"{base_url}/{fn}"))
+            return None
+        except Exception as e:
+            return f"{fn}: {e}"
     with ThreadPoolExecutor(max_workers=16) as pool:
-        for r in pool.map(_one, names):
-            saved += r
-    return saved
+        failed = [r for r in pool.map(_one, names) if r]
+    if failed:
+        print(f"  WARNING: {len(failed)}/{len(names)} downloads failed, e.g. {failed[:3]}")
+    return len(names) - len(failed)
+
+
+def vex_files(vex_dir: Path) -> list:
+    """One VEX file per CVE. A CVE can have an old flat copy and a newer year-directory copy: the newest wins."""
+    best = {}
+    for f in vex_dir.rglob("cve-*.json"):
+        if f.name not in best or f.stat().st_mtime > best[f.name].stat().st_mtime:
+            best[f.name] = f
+    return sorted(best.values())
 
 
 def _sync_vex(base: Path, since) -> int:
