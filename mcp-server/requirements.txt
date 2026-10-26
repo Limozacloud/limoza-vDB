@@ -1,5 +1,5 @@
-mcp>=1.28.1,<2
-starlette>=1.6.0
-uvicorn>=0.53.0
+mcp>=1.30.0,<2
+starlette>=1.9.0
+uvicorn>=0.54.0
 httpx>=0.28.1
-PyJWT>=2.14.0
+PyJWT>=2.15.1
