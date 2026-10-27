@@ -32,6 +32,11 @@ _CVE_I, _CPE_I, _INTRO_I, _FIXED_I, _KB_I = (
 ORIGIN = SOURCE = "microsoft"
 
 _DOTNET_PRODUCTS = {".net", ".net_framework", "dotnet_framework"}
+# A .NET 5+ SDK version (8.0.427: feature band + patch) MSRC sometimes gives as FixedBuild, while a
+# host reports the runtime (8.0.33). Mapped via the .NET release metadata the microsoft sync stores
+# in microsoft/dotnet/; an SDK version not found there stays as it is.
+_DOTNET_SDK = re.compile(r"(?:[5-9]|1\d)\.\d+\.\d{3,}")
+_DOTNET_SDK_RUNTIME: dict = {}
 
 # Office family uses the 16.0.MMMM.PPPP build scheme; MSRC sometimes drops the "16.0."
 _OFFICE = ("office", "excel", "word", "outlook", "powerpoint", "onenote", "visio",
@@ -87,6 +92,8 @@ def _norm_build(fb: str, product: str):
         return None
     if fb.count(".") == 1 and any(o in product for o in _OFFICE):
         return "16.0." + fb
+    if product in _DOTNET_PRODUCTS and _DOTNET_SDK.fullmatch(fb):
+        return _DOTNET_SDK_RUNTIME.get(fb, fb)
     return fb
 
 
@@ -308,9 +315,25 @@ def _collapse_cumulative(rows: list) -> list:
     return out
 
 
+def _load_dotnet_sdk_runtime(base: Path) -> None:
+    """SDK version → runtime version from the stored .NET releases.json files."""
+    _DOTNET_SDK_RUNTIME.clear()
+    for f in glob.glob(str(base / "dotnet" / "*.json")):
+        try:
+            releases = json.loads(Path(f).read_bytes()).get("releases") or []
+        except Exception:
+            continue
+        for rel in releases:
+            runtime = (rel.get("runtime") or {}).get("version")
+            for sdk in [rel.get("sdk") or {}, *(rel.get("sdks") or [])]:
+                if runtime and sdk.get("version"):
+                    _DOTNET_SDK_RUNTIME[sdk["version"]] = runtime
+
+
 def extract(conn, dirs):
     cpe_norm.load(conn)
     base = Path(dirs["microsoft"])
+    _load_dotnet_sdk_runtime(base)
     rows = []
     for f in sorted(glob.glob(str(base / "*.json"))):
         try:

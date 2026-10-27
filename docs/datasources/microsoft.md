@@ -15,7 +15,7 @@ builds** (from the Remediations) drive the [affected-version layer](../affected-
 - **Official:** Yes — Microsoft-maintained
 - **Format:** CVRF JSON (requested with `Accept: application/json`)
 - **Local path:** `{microsoft}/{release}.json` (one file per monthly release)
-- **Sync:** fetch the updates index; download each monthly release not already on disk. The two most-recent releases are always re-fetched (they are revised after Patch Tuesday). No `since`-year filter.
+- **Sync:** fetch the updates index; download each monthly release not already on disk. The two most-recent releases are always re-fetched (they are revised after Patch Tuesday). No `since`-year filter. It also refreshes the .NET release metadata (`releases.json` per .NET 5+ channel, from `dotnetcli.blob.core.windows.net/dotnet/release-metadata/`) into `microsoft/dotnet/`.
 - **Content:** per-CVE CVSS score sets, CWE list, description (Notes Type 2), severity (Threats Type 3), exploit status (Threats Type 1), impact type (Threats Type 0), and per-product fix builds (Remediations `FixedBuild`) → the [affected-version layer](../affected-versions.md).
 
 ```
@@ -62,7 +62,11 @@ Microsoft patches by **build number**, not package version. The `microsoft` extr
   Office 2016+/SQL/Visual Studio).
 - **Fix build.** `FixedBuild` → `affected.fixed` (`version_scheme = generic`), so the
   matcher version-compares a host build against it. Compound .NET Framework values are
-  reduced to the build for the source CPE's framework branch. The source KB is captured in
+  reduced to the build for the source CPE's framework branch. .NET 5+ fixes given as an
+  SDK version (8.0.427) are mapped to the runtime version a host reports (8.0.33) via the
+  .NET release metadata; an SDK version it doesn't list stays as it is. MSRC's per-OS
+  products (".NET 8.0 installed on Linux", CPE `.net_8.0_installed_on_linux`) resolve to
+  the .NET CPE; their platform comes from the product name. The source KB is captured in
   `affected.fix_kb`; it identifies the fixed state but may differ from the cumulative or
   umbrella package Windows Update offers to a particular host.
 - **Applicability.** `affected.source_data` retains ProductID, product name, raw CPE/version,

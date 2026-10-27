@@ -9,6 +9,9 @@ from pathlib import Path
 
 _BASE    = "https://api.msrc.microsoft.com/cvrf/v3.0"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; limoza-ingest/1.0)", "Accept": "application/json"}
+# .NET release metadata: MSRC lists some .NET fixes as SDK versions; the affected extractor maps
+# them to the runtime version a host reports (see sources/microsoft.py).
+_DOTNET_INDEX = "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/releases-index.json"
 
 
 def _get(url, timeout):
@@ -36,4 +39,23 @@ def run(dirs: dict):
         except Exception as e:
             print(f"  {rel}: skip ({e})")
     print(f"  microsoft: {len(releases)} releases · {fetched} fetched")
+    _sync_dotnet(dest / "dotnet")
     return fetched
+
+
+def _sync_dotnet(dest: Path):
+    """Refresh the per-channel .NET releases.json (.NET 5+); keep old files on failure."""
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        channels = json.loads(_get(_DOTNET_INDEX, 60)).get("releases-index") or []
+    except Exception as e:
+        print(f"  dotnet release metadata: skip ({e})")
+        return
+    for ch in channels:
+        ver, url = str(ch.get("channel-version") or ""), ch.get("releases.json")
+        if not url or not ver.split(".")[0].isdigit() or int(ver.split(".")[0]) < 5:
+            continue
+        try:
+            (dest / f"{ver}.json").write_bytes(_get(url, 180))
+        except Exception as e:
+            print(f"  dotnet {ver}: skip ({e})")

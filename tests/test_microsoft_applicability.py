@@ -1,4 +1,5 @@
 from ingest.affected import COLS, cpe_norm
+from ingest.affected.sources import microsoft
 from ingest.affected.sources.microsoft import _doc_rows
 from ingest.match import _legacy_remediation, _microsoft_applicability, match_cpe
 
@@ -319,6 +320,44 @@ def test_dotnet_platform_follows_the_component_target_sw():
         "10.0.0", curations={})
     assert on_windows == {}
     assert set(on_linux) == {"CVE-2026-26171"}
+
+
+def test_per_os_dotnet_products_are_stored_as_dotnet_with_the_runtime_fix(monkeypatch):
+    monkeypatch.setattr(cpe_norm, "_VP", {("microsoft", ".net_framework")})
+    monkeypatch.setattr(cpe_norm, "_VPU", set())
+    monkeypatch.setattr(microsoft, "_DOTNET_SDK_RUNTIME", {"8.0.427": "8.0.33"})
+    doc = {
+        "ProductTree": {"FullProductName": [
+            {"ProductID": "22220", "Value": ".NET 8.0 installed on Windows",
+             "CPE": "cpe:2.3:a:microsoft:.net_8.0_installed_on_windows:*:*:*:*:*:*:*:*"},
+            {"ProductID": "22221", "Value": ".NET 8.0 installed on Linux",
+             "CPE": "cpe:2.3:a:microsoft:.net_8.0_installed_on_linux:*:*:*:*:*:*:*:*"},
+        ]},
+        "Vulnerability": [{"CVE": "CVE-2026-111497", "Remediations": [
+            {"FixedBuild": "8.0.427", "Description": {"Value": "5133964"},
+             "SubType": "Security Update", "ProductID": ["22220", "22221"]},
+        ]}],
+    }
+
+    rows = list(_doc_rows(doc))
+
+    assert [r[COLS.index("cpe23")].split(":")[4] for r in rows] == [".net_framework"] * 2
+    assert [(r[COLS.index("introduced")], r[COLS.index("fixed")]) for r in rows] == [("8.0", "8.0.33")] * 2
+    assert sorted(_source_data(r)["msrc_product_name"] for r in rows) == [
+        ".NET 8.0 installed on Linux", ".NET 8.0 installed on Windows"]
+
+
+def test_dotnet_family_defaults_from_the_version_when_the_cpe_has_none():
+    rows = [
+        _row("CVE-2026-70197", "10.0.13", ".NET 10.0 runtime installed on Windows",
+             product=".net_framework", introduced="10.0", dotnet_framework_product="10.0.0"),
+        _row("CVE-2025-55248", "10.0.14393.8519",
+             "Microsoft .NET Framework 4.8 on Windows 10 Version 1607 for x64-based Systems",
+             product=".net_framework", introduced="10.0", dotnet_framework_product="4.8"),
+    ]
+    findings = match_cpe(_RowsConnection(rows), "cpe:2.3:a:microsoft:.net:10.0.5:*:*:*:*:*:*:*",
+                         "10.0.5", curations={})
+    assert set(findings) == {"CVE-2026-70197"}      # a .NET Framework fix never hits .NET 10
 
 
 def test_office_msi_host_is_not_compared_against_another_servicing_train():
