@@ -47,6 +47,10 @@ def _key(part, vendor, product, update) -> str:
 def _resolve(part, vendor, product, update):
     """Pick the NVD-valid (product, update) among candidates → key, or None."""
     upd = update if update not in _VAGUE else None
+    if vendor == "microsoft" and re.fullmatch(r"\.net_\d+\.\d+_installed_on_[a-z_]+", product):
+        # MSRC 2026-Oct per-OS products (".NET 8.0 installed on Linux") are plain .NET; the
+        # platform stays in the MSRC product name the matcher reads.
+        product = ".net"
     cands = [(product, upd)]
     if vendor == "microsoft" and product in {".net", "dotnet_framework"}:
         # MSRC uses `.net` for framework bundles while Glance and NVD use

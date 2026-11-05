@@ -999,6 +999,10 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     host = dict(host) if isinstance(host, dict) else {}
     component_metadata = dict(component_metadata) if isinstance(component_metadata, dict) else {}
     component_metadata.setdefault("platform", _cpe_platform(cpe))
+    if pkg == ".net_framework" and re.match(r"(?:[5-9]|1\d)\.", version):
+        # .NET 5+ without its family in the CPE `other` field (binary scan): derive it from the
+        # version like glance's registry reader does (10.0.5 → 10.0.0).
+        component_metadata.setdefault("dotnet_framework_product", version.split(".")[0] + ".0.0")
     is_office = bool(_OFFICE_PRODUCT.fullmatch(pkg))
     office_train = _office_train(version) if is_office else None
     if pkg.startswith("windows_") and not host.get("windows_product"):
