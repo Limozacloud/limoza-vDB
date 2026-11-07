@@ -4,6 +4,7 @@
   python -m ingest.run sync   [target...]      download source data (default: all)
   python -m ingest.run ingest [target...]      write downloaded data into the DB
   python -m ingest.run daily                   full pipeline: schema → sync → ingest → affected → hasura-init
+  python -m ingest.run add-cve CVE-… [--scoring]  load single new CVEs now (record + cvelistv5 affected rows)
   python -m ingest.run api                     serve the REST API (POST /match · POST /lve · /healthz)
 
 A target is a source key (epss, kev, …, exploitdb, …) or a group (exploits).
@@ -94,6 +95,10 @@ def main(argv: list[str]) -> int:
 
     if cmd == "match":
         return _match(argv[1:])
+
+    if cmd == "add-cve":
+        from ingest.addcve import run as add_cve
+        return add_cve(argv[1:])
 
     if cmd == "daily":
         return _daily()

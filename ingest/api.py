@@ -12,10 +12,12 @@ No model is involved, so there is no token cost — just a DB lookup.
                                        (does the version in your repo close it? re-match & diff).
     POST /lve     (role lve_writer)    { "product", "title", "fixed"?, … } → create an LVE
                                        (a DB trigger materialises its affected row at once).
+    POST /add-cve (role cve_writer)    { "cve_ids": ["CVE-…", …] } (max 50) → load brand-new CVEs now
+                                       (CVE record + cvelistv5 affected rows, see `vdb add-cve`).
 
 Auth: a Bearer HS256 JWT — the same token `vdb create-token` mints — verified locally with
 the standard library (no external call). /match accepts any valid token; /lve requires the
-lve_writer role. With no HASURA_JWT_SECRET set, auth is disabled (dev only).
+lve_writer role, /add-cve the cve_writer role (mint with `vdb create-token --role cve_writer`). With no HASURA_JWT_SECRET set, auth is disabled (dev only).
 
 Run: `vdb api` (or `python -m ingest.api`); listens on $API_PORT (default 8770).
 """
@@ -26,10 +28,12 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
+from ingest.core.cveid import normalize
 from ingest.core.db import get_conn
 from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_party_build,
                           load_curations, match, parse_cpe, parse_purl, remediation)
@@ -345,6 +349,9 @@ def _create_lve(d: dict) -> dict:
         conn.close()
 
 
+_ADD_CVE_LOCK = threading.Lock()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, obj: dict) -> None:
         body = json.dumps(obj).encode()
@@ -393,6 +400,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(201, {"created": True, **_create_lve(body)})
             except Exception as e:
                 self._json(400, {"created": False, "error": str(e)})
+        elif self.path == "/add-cve":
+            if _SECRET and "cve_writer" not in _roles(payload):
+                return self._json(403, {"error": "cve_writer role required"})
+            ids = [normalize(c) for c in (body.get("cve_ids") or []) if isinstance(c, str)]
+            if not ids or None in ids or len(ids) > 50:
+                return self._json(400, {"error": "cve_ids: 1 to 50 valid CVE ids required"})
+            from ingest.addcve import add_many
+            with _ADD_CVE_LOCK:                 # one load at a time: two requests must not swap the same rows
+                results = add_many(ids)
+            self._json(200, {"results": results, "failed": sum(1 for r in results if "error" in r)})
         elif self.path == "/curation":
             if _SECRET and "curation_writer" not in _roles(payload):
                 return self._json(403, {"error": "curation_writer role required"})
@@ -412,7 +429,7 @@ def main() -> int:
     if not _SECRET:
         print("WARNING: HASURA_JWT_SECRET not set — REST API is UNAUTHENTICATED", flush=True)
     print(f"limoza-vDB REST API on :{port}  "
-          f"(POST /match · POST /lve · POST/GET /curation · GET /healthz)", flush=True)
+          f"(POST /match · POST /lve · POST /add-cve · POST/GET /curation · GET /healthz)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
     return 0
 

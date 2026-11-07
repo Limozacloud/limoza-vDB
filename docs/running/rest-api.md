@@ -7,9 +7,24 @@ many components at once and gets matches back, with **no LLM and no per-call tok
 
 Auth: a Bearer HS256 JWT — the same token [`vdb create-token`](cli.md#create-token) mints —
 verified locally (no external call). `/match` accepts any valid token; `/lve` requires the
-`lve_writer` role and `/curation` the `curation_writer` role.
+`lve_writer` role, `/curation` the `curation_writer` role and `/add-cve` the `cve_writer` role.
 
 ## Endpoints
+
+### `POST /add-cve` — role `cve_writer`
+Loads brand-new CVEs now instead of waiting for `vdb daily` (the same as [`vdb add-cve`](cli.md)): the CVE
+record from the CVE Services API and the CNA-supplied CPE ranges as `cvelistv5` affected rows. NVD
+configurations and vendor advisories still arrive with the daily run. Mint the token with
+`vdb create-token --role cve_writer`.
+
+```json
+{ "cve_ids": ["CVE-2026-123958"] }
+```
+→
+```json
+{ "results": [ { "cve_id": "CVE-2026-123958", "state": "PUBLISHED", "records": 1, "affected": 1 } ], "failed": 0 }
+```
+A CVE that fails (e.g. not published yet) comes back as `{ "cve_id": …, "error": … }`; the others are still loaded.
 
 ### `GET /healthz`
 Liveness check → `ok`.
