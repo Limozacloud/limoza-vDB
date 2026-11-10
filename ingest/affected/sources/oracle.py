@@ -19,7 +19,10 @@ from ingest.core.cveid import normalize
 
 ORIGIN = SOURCE = "oracle"
 
-_DIST = re.compile(r"\.el(\d+)")
+# the release tag of an EVR: ".el8" in a plain build, "+el8" in a module-stream build
+# (httpd 2.4.37-65.0.1.module+el8.10.0+91092+d4ec9ae3.8). Without the "+" form Oracle's own module fixes
+# (5,298 criteria in the OVAL) were dropped and a host got only Red Hat's build strings to compare against.
+_DIST = re.compile(r"[.+]el(\d+)")
 _FIX = re.compile(r"^([\w.+-]+) is earlier than (\S+)$")
 
 
