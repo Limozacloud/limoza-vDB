@@ -56,6 +56,11 @@ def _resolve(part, vendor, product, update):
         # MSRC uses `.net` for framework bundles while Glance and NVD use
         # `.net_framework`. Keep one scanner-facing identity for both spellings.
         cands.insert(0, (".net_framework", upd))
+    if vendor == "microsoft" and product in {".windows_sdk", "windows_sdk"}:
+        # MSRC writes the SDK as ".windows_sdk" (and "Windows SDK" by name); NVD and scanners
+        # use the long product name. Without this alias MSRC's SDK fixes are dropped as
+        # "not in the NVD dictionary" (CVE-2025-47962, CVE-2026-21219).
+        cands.insert(0, ("windows_software_development_kit", upd))
     m = _SPLIT.match(product)
     if m:
         cands.append((m.group(1), m.group(2)))        # _r2 in product → update field
@@ -120,7 +125,7 @@ def from_name(value, vendor="microsoft"):
     s = s.replace("version ", "").replace("(chromium-based)", "chromium")
     s = re.sub(r"\s+", " ", s).strip()
     product = re.sub(r"\s+", "_", s)
-    part = "o" if product.startswith("windows") else "a"
+    part = "o" if product.startswith("windows") and product != "windows_sdk" else "a"
     for prod in (product, product.replace("microsoft_", "")):
         k = _resolve(part, vendor, prod, update)
         if k:
