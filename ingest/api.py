@@ -41,17 +41,21 @@ from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_par
 # Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
 _DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
 
-# INTERMEDIATE (remove with GH #66): glance bakes R2/SP into the Windows product name
-# (windows_server_2012_r2), but our affected rows key the host by the BASE product in source_data
-# (windows_server_2012 — the R2/SP distinction lives in the CPE update field). Fold the suffix off
-# the host's windows_product so Microsoft applicability matches. Verified: _r2/_sp never appears in
-# source_data.windows_product, so this only aligns the host, it never loses a real distinction.
-_WIN_R2_SP = re.compile(r"(.+?)_(r2|sp\d+)$")
+# INTERMEDIATE (remove with GH #66): glance used to bake R2/SP into the Windows product name
+# (windows_server_2012_r2); the NVD form keeps them in the CPE update field (windows_server_2012 + r2).
+# What the MSRC rows carry in source_data.windows_product: the R2 releases keep _r2
+# (windows_server_2012_r2, windows_server_2008_r2), SP2 does not (windows_server_2008, checked on the
+# stored rows). So _spN is folded off the host product and R2 is always present, whichever form the CPE has.
+_WIN_SP = re.compile(r"(.+?)_(sp\d+)$")
 
 
-def _win_base_product(prod: str) -> str:
-    m = _WIN_R2_SP.match(prod or "")
-    return m.group(1) if m else prod
+def _win_host_product(prod: str, update: str = "") -> str:
+    """The windows_product an MSRC row of this host's release carries."""
+    m = _WIN_SP.match(prod or "")
+    base = m.group(1) if m else (prod or "")
+    if update == "r2" and not base.endswith("_r2"):
+        base += "_r2"
+    return base
 
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
@@ -151,11 +155,12 @@ def _bulk_match(components: list, host=None) -> list:
             # encodes the context in the CPE's 2.3 fields; the metadata block is dropped fleet-side.
             host, metadata = dict(request_host), {}
             if cpe.startswith("cpe:"):
-                cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
+                cpe_fields = cpe.lower().split(":") + [""] * 8
+                cpe_prod = cpe_fields[4]
                 q = cpe_qualifiers(cpe)
                 if cpe_prod.startswith("windows_"):
                     # An OS component: its own product + edition / installation type / Azure / arch.
-                    host["windows_product"] = _win_base_product(cpe_prod)   # INTERMEDIATE (GH #66)
+                    host["windows_product"] = _win_host_product(cpe_prod, cpe_fields[6])   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_edition_id"] = q["sw_edition"]
                     if q.get("target_sw"):
@@ -170,7 +175,7 @@ def _bulk_match(components: list, host=None) -> list:
                     # taken by the OS product — the host installation type (server/server_core/client)
                     # in sw_edition, so a Server-Core-only .NET fix is scoped correctly.
                     if q.get("target_sw", "").startswith("windows"):
-                        host["windows_product"] = _win_base_product(q["target_sw"])   # INTERMEDIATE (GH #66)
+                        host["windows_product"] = _win_host_product(q["target_sw"])   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_installation_type"] = q["sw_edition"]
                     if q.get("target_hw"):

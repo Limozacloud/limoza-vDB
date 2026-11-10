@@ -63,3 +63,19 @@ def test_r2_rows_do_not_apply_to_a_host_of_the_base_release():
     rows = [_row("windows_server_2012_r2", "6.3.9600.22523", "KB5123456")]
     assert match_cpe(_Conn(rows), "cpe:2.3:o:microsoft:windows_server_2012:*:*:*:*:*:*:*:*",
                      "6.2.9200.20000", curations={}) == {}
+
+
+@pytest.mark.parametrize("product, update, expected", [
+    ("windows_server_2012_r2", "", "windows_server_2012_r2"),       # older glance form keeps R2
+    ("windows_server_2012", "r2", "windows_server_2012_r2"),        # canonical form: R2 is the update field
+    ("windows_server_2008", "r2", "windows_server_2008_r2"),
+    ("windows_server_2008_sp2", "", "windows_server_2008"),         # SP2 rows carry the base product
+    ("windows_server_2008", "sp2", "windows_server_2008"),
+    ("windows_server_2012", "", "windows_server_2012"),
+    ("windows_server_2022", "", "windows_server_2022"),
+])
+def test_the_api_looks_a_windows_host_up_under_the_product_its_rows_carry(product, update, expected):
+    from ingest.api import _win_host_product
+
+    assert _win_host_product(product, update) == expected
+
