@@ -1006,7 +1006,10 @@ def match_cpe(conn, cpe, version=None, curations=None, servicing_track=None,
     is_office = bool(_OFFICE_PRODUCT.fullmatch(pkg))
     office_train = _office_train(version) if is_office else None
     if pkg.startswith("windows_") and not host.get("windows_product"):
-        host["windows_product"] = pkg
+        # MSRC rows of an R2 release carry windows_product windows_server_2012_r2, while the CPE key
+        # keeps R2 in the update field (windows_server_2012 + r2): put it back, otherwise the
+        # applicability check calls every R2 row incompatible and an R2 host never matches anything.
+        host["windows_product"] = f"{pkg}_r2" if key.split(":")[6] == "r2" else pkg
     if pkg == 'sharepoint_server':
         # The generic CPE does not carry the 2016 / 2019 / Subscription identity. A partial or
         # marketing-year version cannot select an edition and must be "unknown", never compared
