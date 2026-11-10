@@ -12,10 +12,12 @@ No model is involved, so there is no token cost — just a DB lookup.
                                        (does the version in your repo close it? re-match & diff).
     POST /lve     (role lve_writer)    { "product", "title", "fixed"?, … } → create an LVE
                                        (a DB trigger materialises its affected row at once).
+    POST /add-cve (role cve_writer)    { "cve_ids": ["CVE-…", …] } (max 50) → load brand-new CVEs now
+                                       (CVE record + cvelistv5 affected rows, see `vdb add-cve`).
 
 Auth: a Bearer HS256 JWT — the same token `vdb create-token` mints — verified locally with
 the standard library (no external call). /match accepts any valid token; /lve requires the
-lve_writer role. With no HASURA_JWT_SECRET set, auth is disabled (dev only).
+lve_writer role, /add-cve the cve_writer role (mint with `vdb create-token --role cve_writer`). With no HASURA_JWT_SECRET set, auth is disabled (dev only).
 
 Run: `vdb api` (or `python -m ingest.api`); listens on $API_PORT (default 8770).
 """
@@ -26,10 +28,12 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
+from ingest.core.cveid import normalize
 from ingest.core.db import get_conn
 from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_party_build,
                           load_curations, match, parse_cpe, parse_purl, remediation)
@@ -37,17 +41,21 @@ from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_par
 # Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
 _DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
 
-# INTERMEDIATE (remove with GH #66): glance bakes R2/SP into the Windows product name
-# (windows_server_2012_r2), but our affected rows key the host by the BASE product in source_data
-# (windows_server_2012 — the R2/SP distinction lives in the CPE update field). Fold the suffix off
-# the host's windows_product so Microsoft applicability matches. Verified: _r2/_sp never appears in
-# source_data.windows_product, so this only aligns the host, it never loses a real distinction.
-_WIN_R2_SP = re.compile(r"(.+?)_(r2|sp\d+)$")
+# INTERMEDIATE (remove with GH #66): glance used to bake R2/SP into the Windows product name
+# (windows_server_2012_r2); the NVD form keeps them in the CPE update field (windows_server_2012 + r2).
+# What the MSRC rows carry in source_data.windows_product: the R2 releases keep _r2
+# (windows_server_2012_r2, windows_server_2008_r2), SP2 does not (windows_server_2008, checked on the
+# stored rows). So _spN is folded off the host product and R2 is always present, whichever form the CPE has.
+_WIN_SP = re.compile(r"(.+?)_(sp\d+)$")
 
 
-def _win_base_product(prod: str) -> str:
-    m = _WIN_R2_SP.match(prod or "")
-    return m.group(1) if m else prod
+def _win_host_product(prod: str, update: str = "") -> str:
+    """The windows_product an MSRC row of this host's release carries."""
+    m = _WIN_SP.match(prod or "")
+    base = m.group(1) if m else (prod or "")
+    if update == "r2" and not base.endswith("_r2"):
+        base += "_r2"
+    return base
 
 
 _SECRET = os.environ.get("HASURA_JWT_SECRET", "")
@@ -147,11 +155,12 @@ def _bulk_match(components: list, host=None) -> list:
             # encodes the context in the CPE's 2.3 fields; the metadata block is dropped fleet-side.
             host, metadata = dict(request_host), {}
             if cpe.startswith("cpe:"):
-                cpe_prod = (cpe.lower().split(":") + [""] * 5)[4]
+                cpe_fields = cpe.lower().split(":") + [""] * 8
+                cpe_prod = cpe_fields[4]
                 q = cpe_qualifiers(cpe)
                 if cpe_prod.startswith("windows_"):
                     # An OS component: its own product + edition / installation type / Azure / arch.
-                    host["windows_product"] = _win_base_product(cpe_prod)   # INTERMEDIATE (GH #66)
+                    host["windows_product"] = _win_host_product(cpe_prod, cpe_fields[6])   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_edition_id"] = q["sw_edition"]
                     if q.get("target_sw"):
@@ -166,7 +175,7 @@ def _bulk_match(components: list, host=None) -> list:
                     # taken by the OS product — the host installation type (server/server_core/client)
                     # in sw_edition, so a Server-Core-only .NET fix is scoped correctly.
                     if q.get("target_sw", "").startswith("windows"):
-                        host["windows_product"] = _win_base_product(q["target_sw"])   # INTERMEDIATE (GH #66)
+                        host["windows_product"] = _win_host_product(q["target_sw"])   # INTERMEDIATE (GH #66)
                     if q.get("sw_edition"):
                         host["windows_installation_type"] = q["sw_edition"]
                     if q.get("target_hw"):
@@ -345,6 +354,9 @@ def _create_lve(d: dict) -> dict:
         conn.close()
 
 
+_ADD_CVE_LOCK = threading.Lock()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, obj: dict) -> None:
         body = json.dumps(obj).encode()
@@ -393,6 +405,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(201, {"created": True, **_create_lve(body)})
             except Exception as e:
                 self._json(400, {"created": False, "error": str(e)})
+        elif self.path == "/add-cve":
+            if _SECRET and "cve_writer" not in _roles(payload):
+                return self._json(403, {"error": "cve_writer role required"})
+            ids = [normalize(c) for c in (body.get("cve_ids") or []) if isinstance(c, str)]
+            if not ids or None in ids or len(ids) > 50:
+                return self._json(400, {"error": "cve_ids: 1 to 50 valid CVE ids required"})
+            from ingest.addcve import add_many
+            with _ADD_CVE_LOCK:                 # one load at a time: two requests must not swap the same rows
+                results = add_many(ids)
+            self._json(200, {"results": results, "failed": sum(1 for r in results if "error" in r)})
         elif self.path == "/curation":
             if _SECRET and "curation_writer" not in _roles(payload):
                 return self._json(403, {"error": "curation_writer role required"})
@@ -412,7 +434,7 @@ def main() -> int:
     if not _SECRET:
         print("WARNING: HASURA_JWT_SECRET not set — REST API is UNAUTHENTICATED", flush=True)
     print(f"limoza-vDB REST API on :{port}  "
-          f"(POST /match · POST /lve · POST/GET /curation · GET /healthz)", flush=True)
+          f"(POST /match · POST /lve · POST /add-cve · POST/GET /curation · GET /healthz)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
     return 0
 

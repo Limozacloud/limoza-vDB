@@ -26,6 +26,9 @@ ORIGIN = SOURCE = "cvelistv5"
 # patched 3.13.14 host clear the NVD "< 3.15.0" row. Conservative/curated — extend per verified CNA.
 _CNA_CPE = {
     ("python software foundation", "cpython"): "cpe:2.3:a:python:python:*:*:*:*:*:*:*:*",
+    # JetBrains' CNA lists the IDEs by name with exact per-branch ranges (2026.2 < 2026.2.4, ...);
+    # NVD analysis follows weeks later. Only the products glance detects are mapped.
+    ("jetbrains", "pycharm"): "cpe:2.3:a:jetbrains:pycharm:*:*:*:*:*:*:*:*",
 }
 
 _VT = {"semver": "semver", "maven": "maven", "rpm": "rpm",

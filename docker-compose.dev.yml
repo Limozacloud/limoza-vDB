@@ -40,6 +40,7 @@ services:
       - almalinux:/data/almalinux
       - rocky:/data/rocky
       - microsoft:/data/microsoft
+      - broadcom:/data/broadcom
       - ghsa:/data/ghsa
       - osv:/data/osv
       - nodejs:/data/nodejs
@@ -144,6 +145,7 @@ volumes:
   almalinux: {}
   rocky: {}
   microsoft: {}
+  broadcom: {}
   ghsa: {}
   osv: {}
   nodejs: {}
