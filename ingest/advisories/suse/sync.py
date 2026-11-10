@@ -5,11 +5,14 @@
   csaf/      (*-su-*.json)   — per-advisory; only security updates (-su-), listed in
                               index.txt, downloaded individually (no archive).
 
-First run: full. Subsequent: each feed's changes.csv → only changed files.
+First run: full. Subsequent: each feed's changes.csv → only changed files. VEX files are compared with
+the local copy's timestamp (not with a "since" date), so a file whose download failed in an earlier run
+is fetched again by the next one; the advisory checkpoint only advances when every download worked.
 """
 import csv
 import io
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -56,8 +59,34 @@ def _changed(base_url: str, since: str) -> list:
     return out
 
 
-def _fetch_many(base_url: str, dest: Path, names: list) -> int:
-    # names carry SUSE's year sub-directory (e.g. "2026/cve-2026-1234.json")
+def _stale(base_url: str, dest: Path, tolerance: float = 2.0) -> list:
+    """Files listed in the feed's changes.csv whose local copy is missing or older than SUSE's change
+    time. A copy counts at its year path and at the flat path older syncs used. Unlike a "since" date this
+    does not depend on what earlier runs managed to download."""
+    reader = csv.reader(io.StringIO(_get(f"{base_url}/changes.csv").decode()))
+    out = []
+    for row in reader:
+        if len(row) < 2 or not row[0].strip().endswith(".json"):
+            continue
+        name = row[0].strip()
+        try:
+            changed = datetime.fromisoformat(row[1].strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        local = 0.0
+        for cand in (dest / name, dest / Path(name).name):
+            try:
+                local = max(local, os.stat(cand).st_mtime)
+            except OSError:
+                pass
+        if local + tolerance < changed:
+            out.append(name)
+    return out
+
+
+def _fetch_many(base_url: str, dest: Path, names: list) -> tuple:
+    """Download names (they carry SUSE's year sub-directory, e.g. "2026/cve-2026-1234.json").
+    Returns (downloaded, failed names)."""
     def _one(fn):
         try:
             out = dest / fn
@@ -65,12 +94,12 @@ def _fetch_many(base_url: str, dest: Path, names: list) -> int:
             out.write_bytes(_get(f"{base_url}/{fn}"))
             return None
         except Exception as e:
-            return f"{fn}: {e}"
+            return (fn, str(e))
     with ThreadPoolExecutor(max_workers=16) as pool:
         failed = [r for r in pool.map(_one, names) if r]
     if failed:
         print(f"  WARNING: {len(failed)}/{len(names)} downloads failed, e.g. {failed[:3]}")
-    return len(names) - len(failed)
+    return len(names) - len(failed), [f[0] for f in failed]
 
 
 def vex_files(vex_dir: Path) -> list:
@@ -82,7 +111,8 @@ def vex_files(vex_dir: Path) -> list:
     return sorted(best.values())
 
 
-def _sync_vex(base: Path, since) -> int:
+def _sync_vex(base: Path, since) -> tuple:
+    """Returns (downloaded, failed names); downloaded is -1 after a full archive sync."""
     dest = base / "vex"
     dest.mkdir(parents=True, exist_ok=True)
     if not since:
@@ -92,15 +122,16 @@ def _sync_vex(base: Path, since) -> int:
         print("    extracting …")
         subprocess.run(["tar", "-xjf", str(arc), "-C", str(dest), "--strip-components=1"], check=True)
         arc.unlink()
-        return -1
-    names = _changed(_VEX_BASE, since)
+        return -1, []
+    names = _stale(_VEX_BASE, dest)
     if not names:
-        return 0
-    print(f"  vex: {len(names)} changed")
+        return 0, []
+    print(f"  vex: {len(names)} changed or missing locally")
     return _fetch_many(_VEX_BASE, dest, names)
 
 
-def _sync_adv(base: Path, since) -> int:
+def _sync_adv(base: Path, since) -> tuple:
+    """Returns (downloaded, failed names)."""
     dest = base / "advisories"
     dest.mkdir(parents=True, exist_ok=True)
     if not since:
@@ -110,7 +141,7 @@ def _sync_adv(base: Path, since) -> int:
     else:
         names = [n for n in _changed(_ADV_BASE, since) if "-su-" in n.lower()]
         if not names:
-            return 0
+            return 0, []
         print(f"  advisories: {len(names)} changed")
     return _fetch_many(_ADV_BASE, dest, names)
 
@@ -123,11 +154,14 @@ def run(dirs: dict):
     today = datetime.now(timezone.utc).date().isoformat()
 
     print("── sync suse (vex + advisories) ──")
-    nv = _sync_vex(base, state.get("last_vex"))
-    state["last_vex"] = today if nv != -1 else today
-    na = _sync_adv(base, state.get("last_adv"))
-    state["last_adv"] = today
+    nv, vex_failed = _sync_vex(base, state.get("last_vex"))
+    state["last_vex"] = today                 # VEX is compared per file, a failed download is retried next run
+    na, adv_failed = _sync_adv(base, state.get("last_adv"))
+    if not adv_failed:                        # keep the old date so the failed advisories are asked for again
+        state["last_adv"] = today
     ckpt.write_bytes(json.dumps(state).encode())
+    if vex_failed or adv_failed:
+        print(f"  WARNING: {len(vex_failed)} vex and {len(adv_failed)} advisory downloads failed; retried next run")
 
     if nv == -1:
         print("  done (full sync)")
