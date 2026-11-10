@@ -34,6 +34,7 @@ every other source follows (see the [documentation conventions](../datasource_bl
 | Source | Format | Writes |
 |--------|--------|--------|
 | [Microsoft MSRC](microsoft.md) | CVRF v3.0 | descriptions, cvss, cwes, references, advisories, vendor assessment, affected (CPE / fix builds) |
+| [Broadcom (VMware)](broadcom.md) | support-portal list (JSON) + advisory pages (HTML response matrix) | advisories, vendor assessment, affected (VMware Tools, Workstation fix versions) |
 | [Node.js](nodejs.md) | security-wg `vuln/core` (JSON) | descriptions, vendor assessment, affected (CPE / per-release-line fix ranges) |
 
 ### Package ecosystems
@@ -85,6 +86,7 @@ require you to credit them when redistributing.
 | Red Hat (CSAF), SUSE (CSAF) | Freely available vendor security data — **attribution** | |
 | Ubuntu (USN), Debian, Oracle, AlmaLinux, Rocky | Free distro security data | Respect each distro's terms |
 | Microsoft MSRC | Freely available vendor security data | |
+| Broadcom (VMware) advisories | Public vendor security advisories (no login) | Check the Broadcom portal terms before running it at scale |
 | Metasploit modules | BSD-style (Metasploit Framework license) | Individual modules may differ |
 | Nuclei templates | MIT | |
 | PoC-in-GitHub | Aggregated GitHub repo metadata | Each linked repo has its own license |

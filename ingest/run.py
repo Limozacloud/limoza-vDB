@@ -41,6 +41,7 @@ SOURCES = {
     "almalinux":  ("ingest.advisories.almalinux","advisory", "almalinux"),
     "rocky":      ("ingest.advisories.rocky",    "advisory", "rocky"),
     "microsoft":  ("ingest.advisories.microsoft","advisory", "microsoft"),
+    "broadcom":   ("ingest.advisories.broadcom","advisory", "broadcom"),
     "ghsa":       ("ingest.advisories.ghsa",     "advisory", "ghsa"),
     "github_repo":("ingest.advisories.github_repo","advisory", "github_repo"),
     "osv":        ("ingest.advisories.osv",      "advisory", None),
@@ -55,7 +56,7 @@ GROUPS = {
     "reference":  ["cna", "cpe", "cwe", "source_urls"],
     "scoring":    ["epss", "kev", "ssvc"],
     "records":    ["cvelistv5", "nvd"],
-    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft", "ghsa", "osv", "nodejs"],
+    "advisories": ["redhat", "suse", "ubuntu", "debian", "oracle", "almalinux", "rocky", "microsoft", "broadcom", "ghsa", "osv", "nodejs"],
     "exploits":   ["exploitdb", "metasploit", "nuclei", "poc_github"],
 }
 

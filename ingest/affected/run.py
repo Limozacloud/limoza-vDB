@@ -13,7 +13,7 @@ one. It is also more resilient: if an extractor fails mid-run the swap never hap
 the origin's previous rows stay intact instead of being lost to an already-committed delete.
 """
 from ingest.affected import COLS, flush
-from ingest.affected.sources import (almalinux, cvelistv5, debian, ghsa, github_repo, lve,
+from ingest.affected.sources import (almalinux, broadcom, cvelistv5, debian, ghsa, github_repo, lve,
                                      microsoft, nodejs, nvd, oracle, osv, redhat, rocky, suse,
                                      ubuntu)
 
@@ -22,7 +22,7 @@ from ingest.affected.sources import (almalinux, cvelistv5, debian, ghsa, github_
 # `nvd` is the authoritative cpe lane (NVD configurations); `lve` materialises the
 # user-defined lve table → affected (truncate-safe re-seed).
 EXTRACTORS = (redhat, suse, ubuntu, debian, almalinux, rocky, oracle, cvelistv5,
-              microsoft, nvd, osv, ghsa, github_repo, nodejs, lve)
+              microsoft, broadcom, nvd, osv, ghsa, github_repo, nodejs, lve)
 BATCH = 5_000
 _COLS = ",".join(COLS)
 

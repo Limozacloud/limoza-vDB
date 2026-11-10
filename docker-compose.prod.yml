@@ -40,6 +40,7 @@ services:
       - almalinux:/data/almalinux
       - rocky:/data/rocky
       - microsoft:/data/microsoft
+      - broadcom:/data/broadcom
       - ghsa:/data/ghsa
       - github_repo:/data/github_repo
       - osv:/data/osv
@@ -147,6 +148,7 @@ volumes:
   almalinux: {}
   rocky: {}
   microsoft: {}
+  broadcom: {}
   ghsa: {}
   github_repo: {}
   osv: {}
