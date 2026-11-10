@@ -14,7 +14,28 @@ _CVE = re.compile(r"CVE-\d{4}-\d{4,}")
 _FOOTNOTE = re.compile(r"\s*\[\d+\]")
 _VERSION = re.compile(r"^\d+(?:\.\d+)*$")
 _PREFIX = re.compile(r"^\s*(\d+(?:\.\d+)*)")
-_NEEDED = ("product", "component", "version", "running on", "cve", "fixed version")
+# the column layouts seen on the portal: "Product" or "VMware Product", "CVE" or "CVE Identifier", with or
+# without a "Component" column
+_COLUMNS = {
+    "product": ("product", "vmware product"),
+    "component": ("component",),
+    "version": ("version",),
+    "running_on": ("running on",),
+    "cve": ("cve", "cve identifier"),
+    "fixed": ("fixed version",),
+}
+_OPTIONAL = {"component"}
+
+
+def _column_index(head: list):
+    """Column name → index for a matrix header, or None when the table is not a response matrix."""
+    out = {}
+    for key, names in _COLUMNS.items():
+        hit = next((head.index(n) for n in names if n in head), None)
+        if hit is None and key not in _OPTIONAL:
+            return None
+        out[key] = hit
+    return out
 
 
 class _Tables(HTMLParser):
@@ -61,20 +82,20 @@ def parse_matrices(page: str) -> list:
     for table in p.tables:
         if not table:
             continue
-        head = [c.lower() for c in table[0]]
-        if any(name not in head for name in _NEEDED):
+        ix = _column_index([c.lower() for c in table[0]])
+        if ix is None:
             continue
-        ix = {name: head.index(name) for name in _NEEDED}
+        need = max(i for i in ix.values() if i is not None)
         for r in table[1:]:
-            if len(r) <= max(ix.values()):
+            if len(r) <= need:
                 continue
             out.append({
                 "product": strip_footnote(r[ix["product"]]),
-                "component": strip_footnote(r[ix["component"]]),
+                "component": strip_footnote(r[ix["component"]]) if ix["component"] is not None else "",
                 "version": r[ix["version"]],
-                "running_on": r[ix["running on"]],
+                "running_on": r[ix["running_on"]],
                 "cves": _CVE.findall(r[ix["cve"]]),
-                "fixed": strip_footnote(r[ix["fixed version"]]),
+                "fixed": strip_footnote(r[ix["fixed"]]),
             })
     return out
 

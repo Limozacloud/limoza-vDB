@@ -133,3 +133,29 @@ def test_sync_fetches_an_advisory_again_when_it_was_updated(monkeypatch, tmp_pat
     monkeypatch.setattr(sync, "list_all", lambda seg: [_entry(1, updated="2026-11-01")])
     assert sync.run({"broadcom": str(tmp_path)}) == 1
     assert json.loads((tmp_path / "index.json").read_text())["1"]["updated"] == "2026-11-01"
+
+
+def test_parse_matrices_reads_the_older_column_layouts():
+    old = ("<table><tr><th>VMware Product</th><th>Version</th><th>Running On</th><th>CVE Identifier</th>"
+           "<th>CVSSv3</th><th>Severity</th><th>Fixed Version</th><th>Workarounds</th>"
+           "<th>Additional Documentation</th></tr>"
+           "<tr><td>VMware Tools</td><td>12.x.x, 11.x.x</td><td>Windows</td><td>CVE-2025-41239</td><td>7.1</td>"
+           "<td>Important</td><td>12.5.3</td><td>None</td><td>None</td></tr></table>")
+    (r,) = matrix.parse_matrices(old)
+    assert (r["product"], r["component"], r["cves"], r["fixed"]) == ("VMware Tools", "", ["CVE-2025-41239"], "12.5.3")
+
+
+def test_extract_reads_the_older_layout_too(monkeypatch, tmp_path):
+    monkeypatch.setattr(cpe_norm, "load", lambda conn: None)
+    monkeypatch.setattr(cpe_norm, "_VP", {("vmware", "tools")})
+    monkeypatch.setattr(cpe_norm, "_VPU", set())
+    (tmp_path / "advisories").mkdir()
+    (tmp_path / "index.json").write_text(json.dumps({"35877": {}}))
+    (tmp_path / "advisories" / "35877.html").write_text(
+        "<table><tr><th>Product</th><th>Version</th><th>Running On</th><th>CVE Identifier</th><th>CVSSv3</th>"
+        "<th>Severity</th><th>Fixed Version</th><th>Workarounds</th><th>Additional Documents</th></tr>"
+        "<tr><td>VMware Tools</td><td>12.x.x, 11.x.x</td><td>Windows</td><td>CVE-2025-41239</td><td>7.1</td>"
+        "<td>Important</td><td>12.5.3</td><td>None</td><td>None</td></tr></table>")
+    rows = list(broadcom.extract(None, {"broadcom": str(tmp_path)}))
+    assert [(r[COLS.index("cve_id")], r[COLS.index("introduced")], r[COLS.index("fixed")]) for r in rows] == [
+        ("CVE-2025-41239", "11", "12.5.3")]
