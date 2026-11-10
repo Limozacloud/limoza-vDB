@@ -11,7 +11,6 @@ Not covered (the daily run fills them in): NVD configurations, vendor advisories
 refreshes those three, they are small). A CVE whose CNA gives no CPE ends up in `cve_record` without
 `affected` rows — that is reported, not hidden.
 """
-import json
 import os
 import tempfile
 import urllib.error

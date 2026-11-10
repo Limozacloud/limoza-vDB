@@ -36,7 +36,7 @@ def test_record_without_cpe_gives_no_rows(monkeypatch):
 
 
 def test_add_many_reports_a_failing_cve_without_raising(monkeypatch):
-    import os, urllib.error
+    import urllib.error
     from ingest import addcve
     from ingest.records.cvelistv5 import ingest as cv
 
