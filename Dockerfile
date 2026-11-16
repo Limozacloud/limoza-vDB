@@ -3,7 +3,7 @@ FROM golang:1.27-alpine AS go-builder
 RUN go install github.com/k1LoW/trivy-db-to@latest
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.15-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git wget gosu zstd bzip2 xz-utils && rm -rf /var/lib/apt/lists/*
 COPY --from=go-builder /go/bin/trivy-db-to /usr/local/bin/trivy-db-to
 COPY requirements.txt .
