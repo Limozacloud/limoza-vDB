@@ -83,6 +83,8 @@ vulnerabilities[]/
   `suse` form. In [vendor evidence](../running/rest-api.md#vendor-evidence-evidence_cves), a
   `known_not_affected` statement counts as `not_affected` only for the host's own service pack.
   A statement for another SP (e.g. `sles15sp5` on a 15 SP7 host) is reported as `inconclusive`.
+  A base-lane `known_affected` that the matcher hides behind a met LTSS/SAP fix counts as `fixed`
+  only when no curation discarded or raised that fix.
 
 ---
 

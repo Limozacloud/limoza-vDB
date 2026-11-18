@@ -1118,11 +1118,13 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
 # `compliant` alone cannot tell "the host meets the vendor's fix" from "vDB has no record". The
 # evidence names the in-scope vendor rows behind the verdict so a consumer can tell them apart.
 # Records come from exactly the rows the verdict used — after vendor/release scoping, the variant/
-# module/kernel/SUSE guards, curations and VEX overrides — so evidence is never looser than match().
-# Per-row outcome → its rank in _VERDICT_ORDER (first present rank wins). An uncomparable actionable
-# row outranks a met fix — a fix we could not compare may still apply — and reports `inconclusive`.
+# module/kernel/SUSE guards, curations and VEX overrides — so evidence is never looser than match();
+# it may be stricter (a `compliant` component can report `inconclusive`).
+# Per-row outcome → its rank in _VERDICT_ORDER (first present rank wins). An open row the verdict
+# cannot resolve — an uncomparable fix, or a matcher shortcut with no in-scope curated proof
+# (`unproven_override`) — outranks a met fix or a suppression and reports `inconclusive`.
 _OUTCOME_RANK = {
-    "affected": "vulnerable", "uncomparable": "uncomparable",
+    "affected": "vulnerable", "uncomparable": "uncomparable", "unproven_override": "uncomparable",
     "meets_fix": "fixed", "superseded": "fixed",
     "not_affected": "not_affected", "vex_not_affected": "not_affected", "outside_range": "not_affected",
     "wont_fix": "wont_fix", "suppressed": "suppressed",
@@ -1278,40 +1280,71 @@ def _match_purl(conn, purl, version, release, curations, trace=None):
             hv, fv = _v(r[6], _strip_epoch(version)), _v(r[6], _strip_epoch(r[4]))   # r[6]=scheme
             if hv is not None and fv is not None and hv >= fv:
                 suse_patched.add(r[0])
-    # Evidence only: a SUSE not_affected statement proves non-impact only for the host's own SP. The
-    # VEX override above is lane-agnostic (findings unchanged); an override that rests solely on
-    # another SP's statement is reported as `foreign_lane` (inconclusive), not as not_affected.
-    host_sp = _suse_majsp(release or quals.get("distro") or "")[1] if suse else None
-    suse_sp_na = ({r[0] for r in rows if r[7] == "not_affected" and _suse_same_sp(r[2], host_sp)
-                   and _suse_scope(r[2], None, host_prod, host_maj, host_cs)}
-                  if suse and trace is not None else set())
     findings = {}
-    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream, rid in rows:
-        # host-scope guards first: a row outside the host's line is neither a finding nor evidence
+
+    def in_host_scope(r):
+        """The host-line guards: a row outside the host's line is neither a finding nor evidence."""
+        fixed, mstream = r[4], r[9]                               # r[2]=release, r[4]=fixed, r[9]=module_stream
         if (rv := _variant(fixed)) is not None and rv != host_var:
-            continue                     # foreign parallel line (fips/ksplice) — never the host's
+            return False                 # foreign parallel line (fips/ksplice) — never the host's
         if host_stream and mstream and mstream != host_stream:
-            continue                     # foreign module stream (nodejs:14 vs the host's :18) — #35
+            return False                 # foreign module stream (nodejs:14 vs the host's :18) — #35
         if host_kline and (fk := _kernel_line(fixed)) and fk != host_kline:
-            continue                     # foreign kernel line (base 3.10.0 vs kernel-alt 4.5.0) — #52
-        if suse and not _suse_scope(rel_row, fixed, host_prod, host_maj, host_cs):
-            continue                     # foreign SUSE product / major / codestream
+            return False                 # foreign kernel line (base 3.10.0 vs kernel-alt 4.5.0) — #52
+        if suse and not _suse_scope(r[2], fixed, host_prod, host_maj, host_cs):
+            return False                 # foreign SUSE product / major / codestream
+        return True
+
+    def curated_ctx(r):
+        """The row after curation rules (a fresh dict — _curate has no side effects), or None."""
+        return _curate(r[0], {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
+                              "release": r[2], "source": r[1], "status": r[7], "fixed": r[4],
+                              "introduced": r[3], "last_affected": r[5]}, curations)
+
+    # Evidence only. The two shortcuts above — the VEX `not_affected` override and SUSE's
+    # `suse_patched` — are built from every fetched row, before the host-scope guards and curations
+    # (pre-existing behaviour; the findings are deliberately left unchanged here). Evidence may cite
+    # them as proof only when an in-scope, curated row backs them: a not_affected statement for the
+    # host's own module stream / SUSE service pack, or a fix the host meets that no curation
+    # discarded. Otherwise the hidden row is `unproven_override` → verdict `inconclusive`.
+    host_sp = _suse_majsp(release or quals.get("distro") or "")[1] if suse else None
+    proven_na, proven_patched = set(), set()
+    if trace is not None:
+        for r in rows:
+            if r[0] not in trace or r[8] in _SKIP_RAW or not in_host_scope(r):
+                continue
+            ctx = curated_ctx(r)
+            if ctx is None:
+                continue
+            if ctx["status"] == "not_affected":
+                if not suse or _suse_same_sp(r[2], host_sp):
+                    proven_na.add(r[0])
+            elif suse and ctx["fixed"] and ctx["status"] not in _SKIP \
+                    and _suse_scope(r[2], ctx["fixed"], host_prod, host_maj, host_cs):
+                hv, fv = _v(r[6], _strip_epoch(version)), _v(r[6], _strip_epoch(ctx["fixed"]))
+                if hv is not None and fv is not None and hv >= fv:
+                    proven_patched.add(r[0])
+    for r in rows:
+        if not in_host_scope(r):
+            continue
+        cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream, rid = r
+        ctx = curated_ctx(r)
+        curated = ctx is None or (ctx["status"], ctx["fixed"], ctx["introduced"],
+                                  ctx["last_affected"]) != (status, fixed, intro, last)
         if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
-            note(cid, rid, src, rel_row, status, fixed, "wont_fix")
+            note(cid, rid, src, rel_row, status, fixed, "suppressed" if ctx is None else "wont_fix", curated)
             continue
         if suse and status == "affected" and fixed is None and cid in suse_patched:
-            note(cid, rid, src, rel_row, status, fixed, "superseded")
+            note(cid, rid, src, rel_row, status, fixed,
+                 "suppressed" if ctx is None else
+                 "superseded" if cid in proven_patched else "unproven_override", curated)
             continue                     # base "known_affected" but host meets an LTSS/SAP fix
-        ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
-                            "release": rel_row, "source": src, "status": status,
-                            "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
         if ctx is None:
-            note(cid, rid, src, rel_row, status, fixed, "suppressed", curated=True)
+            note(cid, rid, src, rel_row, status, fixed, "suppressed", curated)
             continue                                              # suppressed by a curation rule
-        curated = (ctx["status"], ctx["fixed"], ctx["introduced"], ctx["last_affected"]) != (status, fixed, intro, last)
         if ctx["status"] == "affected" and ctx["fixed"] is None and cid in not_affected:
             note(cid, rid, src, rel_row, ctx["status"], None,
-                 "foreign_lane" if suse and cid not in suse_sp_na else "vex_not_affected", curated)
+                 "vex_not_affected" if cid in proven_na else "unproven_override", curated)
             continue                     # VEX not_affected overrides the co-rebuild "affected"
         vulnerable = is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"],
                                    ctx["status"])

@@ -209,7 +209,8 @@ def test_suse_not_affected_for_another_service_pack_is_not_proof():
     findings, (ev,) = match_with_evidence(_Conn(FIREFOX_ROWS), sp7, [CVE], curations={})
     assert findings == match(_Conn(FIREFOX_ROWS), sp7, curations={})
     assert ev["verdict"] == "inconclusive"
-    assert {r["outcome"] for r in ev["records"]} == {"foreign_lane"}
+    assert {(r["affected_id"], r["outcome"]) for r in ev["records"]} == {
+        (4705057985, "foreign_lane"), (4705061600, "unproven_override")}
 
 
 def test_evidence_is_rejected_for_cpe_and_unsupported_for_third_party():
@@ -218,6 +219,86 @@ def test_evidence_is_rejected_for_cpe_and_unsupported_for_third_party():
     remi = "pkg:rpm/ol/php-cli@8.4.24-1.el8.remi?distro=ol-8.10&vendor=Remi"
     assert match_with_evidence(_Conn({}), remi, [CVE], curations={}) == (
         {}, [{"id": CVE, "verdict": "unsupported", "reason": "third_party_build", "records": []}])
+
+
+# ── matcher shortcuts: evidence needs an in-scope, curated basis (review P1s) ─────────────
+# The VEX not_affected override and SUSE's suse_patched are built from every fetched row before the
+# host-scope guards and curations. The findings keep that pre-existing behaviour; the evidence must
+# never certify `fixed` / `not_affected` from a row a guard excluded or a curation discarded.
+
+def _cur(action, **sel):
+    rule = {"cve_id": CVE, "action": action, "coord": None, "ecosystem": None, "package": None,
+            "cpe23": None, "release": None, "source": None, "status": None, "fixed": None,
+            "introduced": None, "last_affected": None}
+    rule.update(sel)
+    return {CVE: [rule]}
+
+
+SLES_LTSS = "pkg:rpm/sles/libfoo1@1.0-150300.3.9.1?arch=x86_64&distro=sles-15.3"
+LTSS_ROWS = {"libfoo1": [_row(CVE, "suse", "sles15sp3", None, status="affected", rid=1),
+                         _row(CVE, "suse", "sles-ltss15sp3", "1.0-150300.3.8.1", rid=2)]}
+
+
+def _both(rows, purl, curations):
+    """match_with_evidence, asserting its findings equal plain match() (evidence never alters them)."""
+    findings, (ev,) = match_with_evidence(_Conn(rows), purl, [CVE], curations=curations)
+    assert findings == match(_Conn(rows), purl, curations=curations)
+    return findings, ev, {r["affected_id"]: r["outcome"] for r in ev["records"]}
+
+
+def test_suse_base_affected_superseded_by_a_met_ltss_fix_is_fixed():
+    findings, ev, outcomes = _both(LTSS_ROWS, SLES_LTSS, {})
+    assert findings == {} and ev["verdict"] == "fixed"
+    assert outcomes == {1: "superseded", 2: "meets_fix"}
+
+
+def test_suse_suppressed_fix_row_is_not_proof_of_a_fix():
+    findings, ev, outcomes = _both(LTSS_ROWS, SLES_LTSS, _cur("suppress", release="sles-ltss15sp3"))
+    assert findings == {}                                  # pre-existing matcher behaviour, unchanged
+    assert ev["verdict"] == "inconclusive"
+    assert outcomes == {1: "unproven_override", 2: "suppressed"}
+
+
+def test_suse_whole_cve_suppression_is_suppressed_not_fixed():
+    findings, ev, outcomes = _both(LTSS_ROWS, SLES_LTSS, _cur("suppress"))
+    assert findings == {} and ev["verdict"] == "suppressed"
+    assert set(outcomes.values()) == {"suppressed"}
+    assert all(r["curated"] for r in ev["records"])
+
+
+def test_suse_fix_raised_above_the_host_by_curation_is_vulnerable():
+    findings, ev, outcomes = _both(LTSS_ROWS, SLES_LTSS,
+                                   _cur("set_fixed", release="sles-ltss15sp3", fixed="1.0-150300.3.20.1"))
+    assert set(findings) == {CVE} and ev["verdict"] == "vulnerable"
+    assert outcomes == {1: "unproven_override", 2: "affected"}
+
+
+NODE18 = "pkg:rpm/redhat/nodejs@18.20.2-1.module+el9.4.0?arch=x86_64&distro=redhat-9.4&rpmmod=nodejs:18:9040:abc"
+
+
+def test_foreign_module_not_affected_is_not_proof():
+    rows = {"nodejs": [_row(CVE, "redhat", "el9", None, status="affected", stream="nodejs:18", rid=10),
+                       _row(CVE, "redhat", "el9", None, status="not_affected", stream="nodejs:20", rid=11)]}
+    findings, ev, outcomes = _both(rows, NODE18, {})
+    assert findings == {}                                  # pre-existing matcher behaviour, unchanged
+    assert ev["verdict"] == "inconclusive"
+    assert outcomes == {10: "unproven_override"}           # the nodejs:20 row is never a record
+
+
+def test_same_module_not_affected_is_not_affected():
+    rows = {"nodejs": [_row(CVE, "redhat", "el9", None, status="affected", stream="nodejs:18", rid=10),
+                       _row(CVE, "redhat", "el9_4", None, status="not_affected", stream="nodejs:18", rid=11)]}
+    findings, ev, outcomes = _both(rows, NODE18, {})
+    assert findings == {} and ev["verdict"] == "not_affected"
+    assert outcomes == {10: "vex_not_affected", 11: "not_affected"}
+
+
+def test_curation_discarding_the_not_affected_statement_is_not_proof():
+    rows = {"nodejs": [_row(CVE, "redhat", "el9", None, status="affected", stream="nodejs:18", rid=10),
+                       _row(CVE, "redhat", "el9_4", None, status="not_affected", stream="nodejs:18", rid=11)]}
+    findings, ev, outcomes = _both(rows, NODE18, _cur("suppress", release="el9_4"))
+    assert findings == {} and ev["verdict"] == "inconclusive"
+    assert outcomes == {10: "unproven_override", 11: "suppressed"}
 
 
 # ── REST /match ──────────────────────────────────────────────────────────────────────────

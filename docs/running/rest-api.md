@@ -104,7 +104,16 @@ Without `evidence_cves` the response is unchanged. With it, every result carries
 entry per requested CVE, in request order. The records come from exactly the `affected` rows the
 verdict used: after vendor/release scoping, the fips/ksplice/module/kernel/SUSE guards,
 [curations](../affected-versions.md#curation-match-time-overrides) and VEX overrides. They
-are never looser than the match itself. `affected_id` is the `affected.id` of the row (look it up via
+are never looser than the match itself, but they can be stricter. Two matcher shortcuts hide an open
+vendor "affected" row:
+
+- a package-level `not_affected` statement overrides it;
+- on SUSE, a met fix on another support lane supersedes it.
+
+Evidence accepts either shortcut only when it rests on an in-scope row that no curation discarded:
+a statement for the host's own module stream or SUSE service pack, or a fix the host meets.
+Otherwise the hidden row is reported as `unproven_override` and the CVE as `inconclusive`, even
+though `status` stays `compliant`. `affected_id` is the `affected.id` of the row (look it up via
 [GraphQL](graphql.md) for the full record), and `package_match` says whether the row is keyed by
 the `binary` package or the `source` package fallback (`upstream=`, typical for deb).
 
@@ -115,7 +124,7 @@ the `binary` package or the `source` package fallback (`upstream=`, typical for 
 | `not_affected` | an in-scope vendor statement says not affected (or the version is outside the affected range) |
 | `wont_fix` | the vendor acknowledges it but ships no fix (`wont_fix`, Red Hat "Fix deferred") |
 | `suppressed` | a curation rule suppressed the vendor rows |
-| `inconclusive` | only under-investigation/unknown rows, a fix that could not be compared, or a SUSE `not_affected` for another service pack |
+| `inconclusive` | one of: only under-investigation/unknown rows; a fix that could not be compared; a SUSE `not_affected` for another service pack; an `unproven_override` (see above) |
 | `no_record` | no in-scope vendor record — a coverage gap, **not** proof of compliance |
 | `unsupported` | no vendor evidence for this identity; `reason` is `cpe_identity`, `generic_identity`, `alias_identity`, `third_party_build` or `error` |
 
