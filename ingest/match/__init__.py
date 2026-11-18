@@ -17,6 +17,8 @@ from univers.versions import (AlpineLinuxVersion, ComposerVersion, DebianVersion
                                GenericVersion, GolangVersion, MavenVersion, NugetVersion,
                                PypiVersion, RpmVersion, RubygemsVersion, SemverVersion)
 
+from ingest.match.vendor_alias import distro_vendor, rhel_family_release
+
 SCHEME = {
     "rpm": RpmVersion, "deb": DebianVersion, "apk": AlpineLinuxVersion,
     "semver": SemverVersion, "pep440": PypiVersion, "maven": MavenVersion,
@@ -190,11 +192,9 @@ def parse_purl(purl):
 
 
 _EL_TAG = re.compile(r"^el(\d+)(?:_(\d+))?$", re.I)
-# scanners label RHEL-family distros as <name>-<major>[.<minor>] (redhat-9.3, rhel-9, centos-9,
-# rocky-9, almalinux-9, oraclelinux-9, ol9); normalise those to the el-tag form.
-_RPM_DISTRO = re.compile(
-    r"^(?:rhel|redhat|centos|rocky(?:linux)?|alma(?:linux)?|oracle(?:linux)?|ol)[-_ ]?(\d+)(?:[.](\d+))?$",
-    re.I)
+# Scanners label RHEL-family distros as <name>-<major>[.<minor>] (redhat-9.3, rhel-9, centos-9,
+# rocky-9, almalinux-9, oraclelinux-9, ol-8.10, ol9). `rhel_family_release` normalises those (via
+# the shared alias map in vendor_alias) to (major, minor) for the el-tag form.
 
 # Vendor of an rpm host → which affected `source`s to trust. The elN dist-tag is SHARED across the
 # whole RHEL family (redhat/oracle/alma/rocky all tag el8_6), so the release stream alone cannot
@@ -204,11 +204,10 @@ _RPM_DISTRO = re.compile(
 # own — it IS a RHEL rebuild — so it maps to Red Hat. `oracle` is NEVER pulled into a non-Oracle
 # match (that is exactly where the ksplice noise lives). Unknown vendor → None → no source filter →
 # the whole-family pool (unchanged legacy behaviour: best-effort coverage when no vendor is given).
-_RPM_VENDOR = re.compile(r"^(rhel|redhat|centos|rocky|alma|oracle|ol)(?:linux)?(?:[-_. ]?\d.*)?$", re.I)
+# Keyed by the canonical vendor from vendor_alias.distro_vendor (ol / oraclelinux / oel → oracle).
 _VENDOR_SOURCES = {
-    "rhel": ["redhat"], "redhat": ["redhat"], "centos": ["redhat"],
-    "oracle": ["oracle", "redhat"], "ol": ["oracle", "redhat"],
-    "alma": ["almalinux", "redhat"], "rocky": ["rocky", "redhat"],
+    "redhat": ["redhat"], "centos": ["redhat"], "oracle": ["oracle", "redhat"],
+    "almalinux": ["almalinux", "redhat"], "rocky": ["rocky", "redhat"],
 }
 
 
@@ -216,9 +215,9 @@ def _rpm_sources(distro, namespace):
     """RHEL-family vendor → affected `source`s to match, or None (unknown → whole-family pool).
     `distro` (the distro= qualifier / release) wins; the purl namespace is the fallback."""
     for cand in (distro, namespace):
-        m = _RPM_VENDOR.match(cand or "")
-        if m:
-            return _VENDOR_SOURCES[m.group(1).lower()]
+        vendor = distro_vendor(cand)
+        if vendor in _VENDOR_SOURCES:
+            return _VENDOR_SOURCES[vendor]
     return None
 
 
@@ -249,8 +248,8 @@ def _rpm_streams(version, rel):
     An earlier `max(build, distro)` collapsed both to the higher minor and dropped the frozen-tag
     line, silently missing those EUS fixes (false negative). The release is the full fallback when
     the version carries no tag at all."""
-    rm = _EL_TAG.match(rel or "") or _RPM_DISTRO.match(rel or "")
-    rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (None, None)
+    rm = _EL_TAG.match(rel or "")
+    rmaj, rmin = (rm.group(1), rm.group(2)) if rm else (rhel_family_release(rel) or (None, None))
     m = _DIST.search(version or "")
     if m:
         major, _, minor = m.group(1).partition("_")
@@ -403,6 +402,14 @@ def _suse_scope(lane, fixed, host_prod, host_maj, host_cs):
     if fixed and host_cs and _suse_cs(fixed) != host_cs:
         return False
     return True
+
+
+def _suse_same_sp(lane, host_sp):
+    """Does a SUSE status statement (not_affected) speak for the host's own service pack? A lane
+    without an SP is major-wide; an SP lane (`sles15sp5`) needs a known, equal host SP. Fix rows
+    don't need this — their shared codestream build numbering already places the host (see above)."""
+    lane_sp = _suse_majsp(lane)[1]
+    return lane_sp is None or lane_sp == host_sp
 
 
 def _lane(ptype, version, quals, release=None):
@@ -1104,6 +1111,73 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
     if purl.startswith("cpe:"):
         return match_cpe(conn, purl, version, curations, servicing_track,
                          host=host, component_metadata=component_metadata)
+    return _match_purl(conn, purl, version, release, curations)
+
+
+# ── per-CVE vendor evidence (opt-in, /match `evidence_cves`) ───────────────────────────────
+# `compliant` alone cannot tell "the host meets the vendor's fix" from "vDB has no record". The
+# evidence names the in-scope vendor rows behind the verdict so a consumer can tell them apart.
+# Records come from exactly the rows the verdict used — after vendor/release scoping, the variant/
+# module/kernel/SUSE guards, curations and VEX overrides — so evidence is never looser than match().
+# Per-row outcome → its rank in _VERDICT_ORDER (first present rank wins). An uncomparable actionable
+# row outranks a met fix — a fix we could not compare may still apply — and reports `inconclusive`.
+_OUTCOME_RANK = {
+    "affected": "vulnerable", "uncomparable": "uncomparable",
+    "meets_fix": "fixed", "superseded": "fixed",
+    "not_affected": "not_affected", "vex_not_affected": "not_affected", "outside_range": "not_affected",
+    "wont_fix": "wont_fix", "suppressed": "suppressed",
+    "under_investigation": "inconclusive", "unknown": "inconclusive",
+    # a SUSE not_affected statement for another service pack — not proof for the host's own SP
+    "foreign_lane": "inconclusive",
+}
+_VERDICT_ORDER = ("vulnerable", "uncomparable", "fixed", "not_affected", "wont_fix", "suppressed",
+                  "inconclusive")
+
+
+def _evidence_verdict(records):
+    """CVE-level verdict from its in-scope records; `no_record` when the vendor feeds have none."""
+    ranks = {_OUTCOME_RANK[r["outcome"]] for r in records}
+    verdict = next((v for v in _VERDICT_ORDER if v in ranks), "no_record")
+    return "inconclusive" if verdict == "uncomparable" else verdict
+
+
+def _not_vulnerable_outcome(scheme, installed, introduced, fixed, status):
+    """Why is_vulnerable() returned False for a row: its status, or where the host sits vs range."""
+    if status in _SKIP:
+        return status                               # not_affected / under_investigation / unknown / wont_fix
+    if introduced and introduced != "0":
+        lo, iv = _v(scheme, introduced), _v(scheme, installed)
+        if lo is not None and iv is not None and iv < lo:
+            return "outside_range"                  # below the introducing version
+    return "meets_fix" if fixed else "outside_range"   # at/above the fix, or past last_affected
+
+
+def match_with_evidence(conn, purl, cves, version=None, release=None, curations=None):
+    """match() for a purl component plus per-CVE vendor evidence for each id in `cves`.
+
+    → (findings, [{"id", "verdict", "records"}, …] in `cves` order). `verdict` is one of
+    vulnerable | fixed | not_affected | wont_fix | suppressed | inconclusive | no_record."""
+    if purl.startswith("cpe:"):
+        raise ValueError("evidence is only available for purl components")
+    if is_third_party_build(purl):
+        return {}, [{"id": cid, "verdict": "unsupported", "reason": "third_party_build", "records": []}
+                    for cid in cves]
+    if curations is None:
+        curations = load_curations(conn)
+    trace = {cid: [] for cid in cves}
+    findings = _match_purl(conn, purl, version, release, curations, trace)
+    evidence = []
+    for cid in trace:
+        records = trace[cid]
+        evidence.append({"id": cid,
+                         "verdict": "vulnerable" if cid in findings else _evidence_verdict(records),
+                         "records": records})
+    return findings, evidence
+
+
+def _match_purl(conn, purl, version, release, curations, trace=None):
+    """The purl matcher core. `trace` ({cve_id: []}, optional) collects the in-scope evidence
+    records of those CVEs; it never changes the findings."""
     ptype, name, pv, quals, namespace = parse_purl(purl)
     version = version or pv
     if not version:
@@ -1136,7 +1210,7 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
     # vendor-specific rows (Oracle ksplice, …) don't leak in. Unknown vendor → None → no filter.
     sources = _rpm_sources(release or quals.get("distro"), namespace) if (ptype == "rpm" and not suse) else None
     base = ("SELECT cve_id, source, release, introduced, fixed, last_affected, "
-            "version_scheme, status, status_raw, module_stream FROM affected "
+            "version_scheme, status, status_raw, module_stream, id FROM affected "
             "WHERE ecosystem = %s AND lower(package) = %s ")
     if suse:                                         # SUSE → fetch its own rows; never the RHEL-
         #   rebuild `sll*` product nor the release-less noise. Precise scoping is done per-row below.
@@ -1159,9 +1233,22 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
             cur.execute(sql, (eco, pkg) + extra)
             return cur.fetchall()
 
-    rows = _fetch(primary)
+    rows, row_pkg = _fetch(primary), primary
     if not rows and source_pkg and source_pkg != primary:
-        rows = _fetch(source_pkg)        # source fallback (deb; or an rpm binary OVAL didn't test)
+        rows, row_pkg = _fetch(source_pkg), source_pkg   # source fallback (deb; or an rpm binary OVAL didn't test)
+    if trace is not None:
+        pkg_match = "package" if binary is None else ("binary" if row_pkg == primary else "source")
+
+        def note(cid, rid, src, rel_row, status, fixed, outcome, curated=False):
+            if cid in trace:
+                rec = {"affected_id": rid, "source": src, "package": row_pkg, "package_match": pkg_match,
+                       "release": rel_row, "status": status, "fixed": fixed, "outcome": outcome}
+                if curated:
+                    rec["curated"] = True
+                trace[cid].append(rec)
+    else:
+        def note(*_a, **_k):
+            pass
     host_var = _variant(version)         # fips/ksplice host only compares to its own variant's fixes
     # AppStream module stream (nodejs:18, php:8.0) from glance's `rpmmod` qualifier. The streams are
     # parallel, independently maintained lines — a host on nodejs:10 must NOT be flagged against a
@@ -1191,30 +1278,52 @@ def match(conn, purl, version=None, release=None, curations=None, servicing_trac
             hv, fv = _v(r[6], _strip_epoch(version)), _v(r[6], _strip_epoch(r[4]))   # r[6]=scheme
             if hv is not None and fv is not None and hv >= fv:
                 suse_patched.add(r[0])
+    # Evidence only: a SUSE not_affected statement proves non-impact only for the host's own SP. The
+    # VEX override above is lane-agnostic (findings unchanged); an override that rests solely on
+    # another SP's statement is reported as `foreign_lane` (inconclusive), not as not_affected.
+    host_sp = _suse_majsp(release or quals.get("distro") or "")[1] if suse else None
+    suse_sp_na = ({r[0] for r in rows if r[7] == "not_affected" and _suse_same_sp(r[2], host_sp)
+                   and _suse_scope(r[2], None, host_prod, host_maj, host_cs)}
+                  if suse and trace is not None else set())
     findings = {}
-    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream in rows:
-        if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
-            continue
+    for cid, src, rel_row, intro, fixed, last, scheme, status, sraw, mstream, rid in rows:
+        # host-scope guards first: a row outside the host's line is neither a finding nor evidence
         if (rv := _variant(fixed)) is not None and rv != host_var:
             continue                     # foreign parallel line (fips/ksplice) — never the host's
         if host_stream and mstream and mstream != host_stream:
             continue                     # foreign module stream (nodejs:14 vs the host's :18) — #35
         if host_kline and (fk := _kernel_line(fixed)) and fk != host_kline:
             continue                     # foreign kernel line (base 3.10.0 vs kernel-alt 4.5.0) — #52
-        if suse:
-            if not _suse_scope(rel_row, fixed, host_prod, host_maj, host_cs):
-                continue                 # foreign SUSE product / major / codestream
-            if status == "affected" and fixed is None and cid in suse_patched:
-                continue                 # base "known_affected" but host meets an LTSS/SAP fix
+        if suse and not _suse_scope(rel_row, fixed, host_prod, host_maj, host_cs):
+            continue                     # foreign SUSE product / major / codestream
+        if sraw in _SKIP_RAW:            # deprioritised vendor fix-state (Red Hat "Fix deferred")
+            note(cid, rid, src, rel_row, status, fixed, "wont_fix")
+            continue
+        if suse and status == "affected" and fixed is None and cid in suse_patched:
+            note(cid, rid, src, rel_row, status, fixed, "superseded")
+            continue                     # base "known_affected" but host meets an LTSS/SAP fix
         ctx = _curate(cid, {"coord": "purl", "ecosystem": eco, "package": primary, "cpe23": None,
                             "release": rel_row, "source": src, "status": status,
                             "fixed": fixed, "introduced": intro, "last_affected": last}, curations)
         if ctx is None:
+            note(cid, rid, src, rel_row, status, fixed, "suppressed", curated=True)
             continue                                              # suppressed by a curation rule
+        curated = (ctx["status"], ctx["fixed"], ctx["introduced"], ctx["last_affected"]) != (status, fixed, intro, last)
         if ctx["status"] == "affected" and ctx["fixed"] is None and cid in not_affected:
+            note(cid, rid, src, rel_row, ctx["status"], None,
+                 "foreign_lane" if suse and cid not in suse_sp_na else "vex_not_affected", curated)
             continue                     # VEX not_affected overrides the co-rebuild "affected"
-        if is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"], ctx["status"]):
+        vulnerable = is_vulnerable(scheme, version, ctx["introduced"], ctx["fixed"], ctx["last_affected"],
+                                   ctx["status"])
+        if vulnerable:
             findings.setdefault(cid, []).append((src, ctx["status"], ctx["fixed"], None, scheme))
+            note(cid, rid, src, rel_row, ctx["status"], ctx["fixed"], "affected", curated)
+        elif trace is not None:
+            outcome = "uncomparable" if vulnerable is None else _not_vulnerable_outcome(
+                scheme, version, ctx["introduced"], ctx["fixed"], ctx["status"])
+            if outcome == "not_affected" and suse and not _suse_same_sp(rel_row, host_sp):
+                outcome = "foreign_lane"
+            note(cid, rid, src, rel_row, ctx["status"], ctx["fixed"], outcome, curated)
     return findings
 
 

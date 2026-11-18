@@ -59,6 +59,11 @@ Legend: ✅ imported  ✗ not imported
   package name and fix EVR directly in its human-readable comment, regardless of AND/OR
   nesting (arch-specific branches just repeat the same pair) — a straight text match, no
   cross-referencing.
+- Affected rows are stored as `pkg:rpm/oracle/<package>`, while inventory (glance) reports
+  Oracle Linux hosts by their os-release ID: `pkg:rpm/ol/<package>?distro=ol-8.10`. The matcher
+  maps `ol` / `oraclelinux` / `oracle-linux` / `oel` to Oracle through the shared alias map. The REST
+  API's `canonical_component` returns the `oracle` form (see
+  [vendor evidence](../running/rest-api.md#vendor-evidence-evidence_cves)).
 
 ---
 
