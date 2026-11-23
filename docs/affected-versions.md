@@ -150,6 +150,11 @@ exposed as the [`vdb match`](running/cli.md#match) CLI and the
   [`univers`](https://github.com/aboutcode-org/univers) per scheme. For deb the **source**
   package (the `upstream` qualifier, falling back to the purl name) and the release
   codename (`distro=debian-11` → `bullseye`, `ubuntu-22.04` → `jammy`, …) drive the lookup.
+  For rpm the inventory's distro ID is resolved through one reviewed alias map
+  (`ingest/match/vendor_alias.py`: `ol`/`oraclelinux`/`oel` → Oracle, `sles`/`sled`/`opensuse-*`
+  → SUSE, …), which scopes the host to its vendor's rows (`ol-8.10` → Oracle + Red Hat on
+  `el8`/`el8_10`). The REST API can return the in-scope vendor rows behind a verdict
+  ([vendor evidence](running/rest-api.md#vendor-evidence-evidence_cves)).
 - **cpe input** → `vendor:product(+update)` lookup. The `generic` scheme compares with
   `univers`' `MavenVersion`, so numeric parts rank numerically (17.9 < 17.10, Windows UBRs)
   and letter versions work (openssl 1.1.1w < 1.1.1x). Findings are aggregated per

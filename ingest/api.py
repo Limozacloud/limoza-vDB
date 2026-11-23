@@ -6,10 +6,13 @@ No model is involved, so there is no token cost — just a DB lookup.
 
     GET  /healthz
     POST /match   (any valid token)   { "components": [ {purl|cpe, version, release?,
-                                         repository_version?, servicing_track?}, … ] }
+                                         repository_version?, servicing_track?}, … ],
+                                         evidence_cves?: ["CVE-…", …] }
                                        → per component {status, cves} + summary. Deduped.
                                        repository_version → per-CVE repo_fixable + repo_fixed_cves
                                        (does the version in your repo close it? re-match & diff).
+                                       evidence_cves → per component canonical_component + per-CVE
+                                       vendor evidence (fixed / not_affected / no_record / …).
     POST /lve     (role lve_writer)    { "product", "title", "fixed"?, … } → create an LVE
                                        (a DB trigger materialises its affected row at once).
 
@@ -30,9 +33,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ingest.component_alias import temporary_cpe_alias
+from ingest.core.cveid import normalize as normalize_cve
 from ingest.core.db import get_conn
 from ingest.match import (_sharepoint_product_line, cpe_qualifiers, is_third_party_build,
-                          load_curations, match, parse_cpe, parse_purl, remediation)
+                          load_curations, match, match_with_evidence, parse_cpe, parse_purl, remediation)
+from ingest.match.vendor_alias import canonical_purl
+
+# Per-request cap on `evidence_cves`: evidence is an audit aid for a handful of CVEs, not a bulk export.
+_MAX_EVIDENCE_CVES = 25
 
 # Microsoft .NET CPE products whose `other` field carries the MSRC family (dotnet_framework_product).
 _DOTNET_CPE_PRODUCTS = {".net_framework", ".net", ".net_core", "asp.net_core", "dotnet_framework"}
@@ -95,8 +103,35 @@ def _fmt(findings: dict) -> list:
     return out
 
 
-def _bulk_match(components: list, host=None) -> list:
+def _evidence_cves(value) -> list:
+    """Validate the optional request-level `evidence_cves` → normalised, de-duplicated CVE ids."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > _MAX_EVIDENCE_CVES:
+        raise ValueError(f"evidence_cves must be a list of at most {_MAX_EVIDENCE_CVES} CVE ids")
+    out = []
+    for item in value:
+        cid = normalize_cve(item) if isinstance(item, str) else None
+        if not cid:
+            raise ValueError(f"invalid CVE id in evidence_cves: {item!r}")
+        if cid not in out:
+            out.append(cid)
+    return out
+
+
+def _attach_evidence(entry: dict, cves: list, evidence=None, reason=None) -> dict:
+    """Add `canonical_component` + per-CVE `evidence` to a cache entry when evidence was requested.
+    Without vendor evidence (cpe / generic / alias / third-party / error) each CVE is `unsupported`."""
+    if cves:
+        entry["canonical_component"] = canonical_purl(entry["_matched_component"])
+        entry["evidence"] = evidence if evidence is not None else [
+            {"id": cid, "verdict": "unsupported", "reason": reason, "records": []} for cid in cves]
+    return entry
+
+
+def _bulk_match(components: list, host=None, evidence_cves=None) -> list:
     """Match a batch; identical (ident, version, release) tuples are computed once."""
+    evidence_cves = evidence_cves or []
     conn = get_conn()
     try:
         curations = load_curations(conn)          # load once, apply to every component
@@ -179,12 +214,21 @@ def _bulk_match(components: list, host=None) -> list:
                 # Not assessable against distro advisories (see is_third_party_build) — report it as
                 # such instead of "compliant". glance sends the build's upstream identity (e.g.
                 # cpe:…:php:php:8.4.24, from the binary inside it) as a separate component.
-                cache[k] = {"status": "unknown", "cves": [], "reason": "third_party_build",
-                            "identity_source": "primary", "_matched_component": ident}
+                cache[k] = _attach_evidence(
+                    {"status": "unknown", "cves": [], "reason": "third_party_build",
+                     "identity_source": "primary", "_matched_component": ident},
+                    evidence_cves, reason="third_party_build")
             if k not in cache:
                 try:
-                    f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track,
-                              host=host, component_metadata=metadata)
+                    # Vendor evidence exists only for real ecosystem purls; a CPE or generic purl
+                    # identity reports `unsupported` rather than a guessed verdict.
+                    evidence, evidence_reason = None, ("cpe_identity" if ident.startswith("cpe:")
+                                                       else "generic_identity")
+                    if evidence_cves and ident.startswith("pkg:") and not ident.startswith("pkg:generic/"):
+                        f, evidence = match_with_evidence(conn, ident, evidence_cves, ver, rel, curations)
+                    else:
+                        f = match(conn, ident, ver, rel, curations, servicing_track=preferred_track,
+                                  host=host, component_metadata=metadata)
                     matched_ident = ident
                     identity_source = "primary"
                     # Compatibility path for components already present in legacy inventory
@@ -201,14 +245,19 @@ def _bulk_match(components: list, host=None) -> list:
                             alias_findings = {}
                         if alias_findings:
                             f, matched_ident, identity_source = alias_findings, alias[0], alias[1]
-                    cache[k] = {"status": "vulnerable" if f else "compliant",
-                                "remediation": remediation(
-                                    f, component=matched_ident, version=ver, preferred_track=preferred_track),
-                                "cves": _fmt(f), "identity_source": identity_source,
-                                "_matched_component": matched_ident}
+                            evidence, evidence_reason = None, "alias_identity"
+                    cache[k] = _attach_evidence(
+                        {"status": "vulnerable" if f else "compliant",
+                         "remediation": remediation(
+                             f, component=matched_ident, version=ver, preferred_track=preferred_track),
+                         "cves": _fmt(f), "identity_source": identity_source,
+                         "_matched_component": matched_ident},
+                        evidence_cves, evidence, evidence_reason)
                 except Exception as e:
-                    cache[k] = {"status": "unknown", "cves": [], "error": str(e),
-                                "identity_source": "primary", "_matched_component": ident}
+                    cache[k] = _attach_evidence(
+                        {"status": "unknown", "cves": [], "error": str(e),
+                         "identity_source": "primary", "_matched_component": ident},
+                        evidence_cves, reason="error")
             entry = cache[k]
             matched_ident = entry["_matched_component"]
 
@@ -376,7 +425,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "invalid json"})
 
         if self.path == "/match":
-            res = _bulk_match(body.get("components") or [], body.get("host"))
+            try:
+                evidence_cves = _evidence_cves(body.get("evidence_cves"))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
+            res = _bulk_match(body.get("components") or [], body.get("host"), evidence_cves)
             self._json(200, {
                 "total": len(res),
                 "vulnerable": sum(1 for r in res if r["status"] == "vulnerable"),

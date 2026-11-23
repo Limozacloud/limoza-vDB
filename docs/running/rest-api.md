@@ -78,6 +78,69 @@ The response identifies a successful fallback in `identity_source`; values begin
 `legacy_` are temporary compatibility mappings. They are retired after the matching Glance
 release has produced canonical inventory identities across refreshed hosts.
 
+### Vendor evidence (`evidence_cves`)
+
+`compliant` alone cannot distinguish "the host meets the vendor's fix" from "vDB holds no
+vendor record for this package/release". A caller that needs the difference (e.g. a report that
+must not clear a row without proof) adds an optional top-level `evidence_cves` list (at most 25
+CVE ids; an invalid id or a longer list → `400`):
+
+```json
+{ "evidence_cves": ["CVE-2026-111497"],
+  "components": [ { "purl": "pkg:rpm/ol/brotli@1.0.6-5.el8_10?arch=x86_64&distro=ol-8.10" } ] }
+```
+→
+```json
+{ "component": "pkg:rpm/ol/brotli@1.0.6-5.el8_10?arch=x86_64&distro=ol-8.10",
+  "version": "", "status": "compliant", "remediation": null, "cves": [], "identity_source": "primary",
+  "canonical_component": "pkg:rpm/oracle/brotli@1.0.6-5.el8_10?arch=x86_64&distro=ol-8.10",
+  "evidence": [ { "id": "CVE-2026-111497", "verdict": "fixed",
+    "records": [ { "affected_id": 4729594829, "source": "oracle", "package": "brotli",
+                   "package_match": "binary", "release": "el8_10", "status": "fixed",
+                   "fixed": "1.0.6-5.el8_10", "outcome": "meets_fix" } ] } ] }
+```
+
+Without `evidence_cves` the response is unchanged. With it, every result carries one `evidence`
+entry per requested CVE, in request order. The records come from exactly the `affected` rows the
+verdict used: after vendor/release scoping, the fips/ksplice/module/kernel/SUSE guards,
+[curations](../affected-versions.md#curation-match-time-overrides) and VEX overrides. They
+are never looser than the match itself, but they can be stricter. Two matcher shortcuts hide an open
+vendor "affected" row:
+
+- a package-level `not_affected` statement overrides it;
+- on SUSE, a met fix on another support lane supersedes it.
+
+Evidence accepts either shortcut only when it rests on an in-scope row that no curation discarded:
+a statement for the host's own module stream or SUSE service pack, or a fix the host meets.
+Otherwise the hidden row is reported as `unproven_override` and the CVE as `inconclusive`, even
+though `status` stays `compliant`. `affected_id` is the `affected.id` of the row (look it up via
+[GraphQL](graphql.md) for the full record), and `package_match` says whether the row is keyed by
+the `binary` package or the `source` package fallback (`upstream=`, typical for deb).
+
+| `verdict` | Meaning |
+|-----------|---------|
+| `vulnerable` | the CVE is a finding (it is also in `cves`) |
+| `fixed` | the installed version meets an in-scope vendor fix |
+| `not_affected` | an in-scope vendor statement says not affected (or the version is outside the affected range) |
+| `wont_fix` | the vendor acknowledges it but ships no fix (`wont_fix`, Red Hat "Fix deferred") |
+| `suppressed` | a curation rule suppressed the vendor rows |
+| `inconclusive` | one of: only under-investigation/unknown rows; a fix that could not be compared; a SUSE `not_affected` for another service pack; an `unproven_override` (see above) |
+| `no_record` | no in-scope vendor record — a coverage gap, **not** proof of compliance |
+| `unsupported` | no vendor evidence for this identity; `reason` is `cpe_identity`, `generic_identity`, `alias_identity`, `third_party_build` or `error` |
+
+`canonical_component` rewrites a reviewed inventory namespace to the one vDB stores the vendor's
+rows under (version and qualifiers unchanged), so a consumer can join `affected.purl` without
+its own alias table:
+
+| Inventory namespace / `distro=` ID | vDB namespace |
+|---|---|
+| `ol`, `oraclelinux`, `oracle-linux`, `oracle_linux`, `oel` | `oracle` |
+| `sles`, `sled`, `sles_sap`, `opensuse`, `opensuse-leap`, `opensuse-tumbleweed` | `suse` |
+
+Other namespaces (`redhat`, `rocky`, `almalinux`, deb, ecosystems) and CPEs are returned unchanged.
+The matcher uses the same alias map (`ingest/match/vendor_alias.py`) to scope an rpm host to its
+vendor's rows. For example, an `ol-8.10` host matches Oracle + Red Hat rows on `el8`/`el8_10`.
+
 For non-SQL components, `remediation` (present on vulnerable components) is the **single highest
 fix** that closes the component's fixable CVEs — "upgrade to X → done":
 
